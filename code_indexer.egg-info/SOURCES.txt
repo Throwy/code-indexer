@@ -1,0 +1,15 @@
+README.md
+pyproject.toml
+code_indexer.egg-info/PKG-INFO
+code_indexer.egg-info/SOURCES.txt
+code_indexer.egg-info/dependency_links.txt
+code_indexer.egg-info/entry_points.txt
+code_indexer.egg-info/requires.txt
+code_indexer.egg-info/top_level.txt
+indexer/__init__.py
+indexer/__main__.py
+indexer/db.py
+indexer/indexer.py
+indexer/mcp_server.py
+indexer/parser.py
+indexer/searcher.py

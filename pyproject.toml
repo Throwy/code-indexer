@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "code-indexer"
+version = "0.1.0"
+description = "Local code indexer and MCP server for Claude"
+requires-python = ">=3.10"
+dependencies = [
+    "tree-sitter>=0.21.0",
+    "tree-sitter-python>=0.21.0",
+    "tree-sitter-javascript>=0.21.0",
+    "tree-sitter-typescript>=0.21.0",
+    "tree-sitter-c-sharp>=0.21.0",
+    "tree-sitter-go>=0.21.0",
+    "tree-sitter-java>=0.21.0",
+    "tree-sitter-rust>=0.21.0",
+    "tree-sitter-c>=0.21.0",
+    "tree-sitter-cpp>=0.21.0",
+    "click>=8.0.0",
+    "mcp>=1.0.0",
+]
+
+[project.scripts]
+code-indexer = "indexer.__main__:cli"
+code-indexer-mcp = "indexer.mcp_server:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["indexer*"]

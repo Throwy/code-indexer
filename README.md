@@ -1,18 +1,23 @@
 # code-indexer — Setup Guide
 
-## 1. Install dependencies
+## 1. Install
+
+Clone or download the repo, then install it into your Python environment:
 
 ```bash
-cd C:\dev\code-indexer
-pip install -r requirements.txt
+pip install -e C:\dev\code-indexer
 ```
+
+This registers two commands available anywhere on your system:
+- `code-indexer` — CLI for indexing and searching
+- `code-indexer-mcp` — stdio MCP server for Claude
 
 ---
 
 ## 2. Index a project
 
 ```bash
-python -m indexer index C:\dev\myproject
+code-indexer index C:\dev\myproject
 ```
 
 This creates a `.code-index.db` file inside the target directory.
@@ -27,10 +32,10 @@ Options:
 
 ```bash
 # Full-text keyword search
-python -m indexer search "UserService" --dir C:\dev\myproject
+code-indexer search "UserService" --dir C:\dev\myproject
 
 # JSON output (for scripting / MCP integration)
-python -m indexer search "database connection pool" --dir C:\dev\myproject --json
+code-indexer search "database connection pool" --dir C:\dev\myproject --json
 ```
 
 ---
@@ -47,13 +52,13 @@ Add the following to your Claude Desktop config file.
 {
   "mcpServers": {
     "code-indexer": {
-      "command": "python",
-      "args": ["-m", "indexer.mcp_server"],
-      "cwd": "C:\\dev\\code-indexer"
+      "command": "code-indexer-mcp"
     }
   }
 }
 ```
+
+No `cwd` required — the command works from any directory after installation.
 
 Restart Claude Desktop after editing. You should see "code-indexer" in the MCP tools panel.
 
@@ -76,7 +81,7 @@ Restart Claude Desktop after editing. You should see "code-indexer" in the MCP t
 
 ## 5. Re-indexing
 
-Re-run `python -m indexer index <dir>` any time files change. Only modified files
+Re-run `code-indexer index <dir>` any time files change. Only modified files
 are re-processed, so incremental re-indexes are fast.
 
 For automatic re-indexing you could set up a file watcher or a scheduled task.
