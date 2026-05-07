@@ -1,3 +1,0 @@
-[console_scripts]
-code-indexer = indexer.__main__:cli
-code-indexer-mcp = indexer.mcp_server:main
