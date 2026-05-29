@@ -519,24 +519,26 @@ def language_for_path(path: Path) -> Optional[str]:
     return EXTENSION_TO_LANGUAGE.get(path.suffix.lower())
 
 
+def parse_content(content: bytes, lang_name: str) -> list[Symbol]:
+    """Parse source bytes for a given language name and return symbols."""
+    langs = _langs()
+    if lang_name not in langs:
+        return []
+    parser = Parser(langs[lang_name])
+    tree = parser.parse(content)
+    extractor = _EXTRACTORS.get(lang_name, _extract_generic_symbols)
+    return extractor(tree, content)
+
+
 def parse_file(path: Path) -> list[Symbol]:
     lang_name = language_for_path(path)
     if not lang_name:
         return []
-
-    langs = _langs()
-    if lang_name not in langs:
-        return []
-
     try:
         src = path.read_bytes()
     except (OSError, PermissionError):
         return []
-
-    parser = Parser(langs[lang_name])
-    tree = parser.parse(src)
-    extractor = _EXTRACTORS.get(lang_name, _extract_generic_symbols)
-    return extractor(tree, src)
+    return parse_content(src, lang_name)
 
 
 def iter_source_files(root: Path) -> list[Path]:
