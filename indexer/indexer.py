@@ -101,6 +101,7 @@ def index_directory(
                     body=sym.body,
                     start_line=sym.start_line,
                     end_line=sym.end_line,
+                    base_classes=sym.base_classes or None,
                 )
             stats["files_indexed"] += 1
             stats["symbols_added"] += len(symbols)

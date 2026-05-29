@@ -5,9 +5,10 @@ with their signatures, docstrings, and bodies.
 """
 
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
+import json
 import re
 
 try:
@@ -79,6 +80,7 @@ class Symbol:
     body: Optional[str]
     start_line: int
     end_line: int
+    base_classes: list[str] = field(default_factory=list)  # parent classes / implemented interfaces
 
 
 def _get_languages() -> dict[str, Language]:
@@ -124,6 +126,91 @@ def _first_child_of_type(node: "Node", *types: str) -> Optional["Node"]:
 
 def _children_of_type(node: "Node", *types: str) -> list["Node"]:
     return [c for c in node.children if c.type in types]
+
+
+# ── Base-class extraction helpers ────────────────────────────────────────────
+
+def _extract_python_bases(node: "Node", src: bytes) -> list[str]:
+    """Return superclass names from a Python class_definition node."""
+    bases = []
+    arg_list = _first_child_of_type(node, "argument_list")
+    if not arg_list:
+        return bases
+    for child in arg_list.children:
+        if child.type == "identifier":
+            bases.append(_node_text(child, src))
+        elif child.type == "attribute":  # e.g. module.ClassName
+            bases.append(_node_text(child, src))
+    return bases
+
+
+def _extract_js_ts_bases(node: "Node", src: bytes) -> list[str]:
+    """Return base-class / implemented-interface names from a JS/TS class or interface node."""
+    bases = []
+    for child in node.children:
+        if child.type == "class_heritage":
+            for h in child.children:
+                if h.type == "extends_clause":
+                    # TypeScript: extends_clause wraps the base class identifier
+                    for c in h.children:
+                        if c.type in ("identifier", "type_identifier", "member_expression"):
+                            bases.append(_node_text(c, src))
+                            break
+                elif h.type == "implements_clause":
+                    # TypeScript: implements_clause has type_identifier children directly
+                    for c in h.children:
+                        if c.type in ("type_identifier", "identifier"):
+                            bases.append(_node_text(c, src))
+                        elif c.type == "generic_type":
+                            n = _first_child_of_type(c, "type_identifier", "identifier")
+                            if n:
+                                bases.append(_node_text(n, src))
+                elif h.type in ("identifier", "type_identifier"):
+                    # JavaScript: class_heritage holds the base name directly (no extends_clause wrapper)
+                    bases.append(_node_text(h, src))
+        elif child.type == "extends_type_clause":
+            # TypeScript interface: `interface IFoo extends IBar, IBaz`
+            for c in child.children:
+                if c.type in ("type_identifier", "identifier"):
+                    bases.append(_node_text(c, src))
+    return bases
+
+
+def _extract_csharp_bases(node: "Node", src: bytes) -> list[str]:
+    """Return base-class / interface names from a C# type declaration node."""
+    bases = []
+    for child in node.children:
+        if child.type == "base_list":
+            for c in child.children:
+                if c.type == "identifier":
+                    bases.append(_node_text(c, src))
+                elif c.type == "generic_name":
+                    n = _first_child_of_type(c, "identifier")
+                    if n:
+                        bases.append(_node_text(n, src))
+    return bases
+
+
+def _bases_from_signature(sig: str) -> list[str]:
+    """Regex fallback: extract base names from Java / C++ / Rust signature text."""
+    bases = []
+    # Java: extends Foo implements Bar, Baz
+    m = re.search(r'\bextends\s+([\w.$]+)', sig)
+    if m:
+        bases.append(m.group(1).strip())
+    for m in re.finditer(r'\bimplements\s+([\w.$,\s]+?)(?:\s*\{|$)', sig):
+        for part in m.group(1).split(','):
+            name = part.strip()
+            if name and re.match(r'^[\w.$]+$', name):
+                bases.append(name)
+    # C++: class Foo : public Bar, private Baz
+    m = re.search(r':\s*(.*?)(?:\s*\{|$)', sig)
+    if m:
+        for part in m.group(1).split(','):
+            name = re.sub(r'\b(public|private|protected|virtual)\b\s*', '', part).strip()
+            if name and re.match(r'^\w+$', name):
+                bases.append(name)
+    return bases
 
 
 # ── Language-specific extractors ─────────────────────────────────────────────
@@ -172,6 +259,7 @@ def _extract_python_symbols(tree, src: bytes) -> list[Symbol]:
                 docstring=docstring, body=None,
                 start_line=node.start_point[0] + 1,
                 end_line=node.end_point[0] + 1,
+                base_classes=_extract_python_bases(node, src),
             ))
             for child in node.children:
                 walk(child, class_name=name)
@@ -189,7 +277,7 @@ def _extract_js_ts_symbols(tree, src: bytes) -> list[Symbol]:
 
     def get_name(node: "Node") -> Optional[str]:
         for child in node.children:
-            if child.type == "identifier":
+            if child.type in ("identifier", "type_identifier"):
                 return _node_text(child, src)
             if child.type == "property_identifier":
                 return _node_text(child, src)
@@ -237,6 +325,7 @@ def _extract_js_ts_symbols(tree, src: bytes) -> list[Symbol]:
                 docstring=None, body=None,
                 start_line=node.start_point[0] + 1,
                 end_line=node.end_point[0] + 1,
+                base_classes=_extract_js_ts_bases(node, src),
             ))
             for child in node.children:
                 walk(child, class_name=name)
@@ -249,6 +338,7 @@ def _extract_js_ts_symbols(tree, src: bytes) -> list[Symbol]:
                 docstring=None, body=_node_text(node, src)[:2000],
                 start_line=node.start_point[0] + 1,
                 end_line=node.end_point[0] + 1,
+                base_classes=_extract_js_ts_bases(node, src),
             ))
 
         elif t == "lexical_declaration":
@@ -294,6 +384,7 @@ def _extract_csharp_symbols(tree, src: bytes) -> list[Symbol]:
                 docstring=None, body=None,
                 start_line=node.start_point[0] + 1,
                 end_line=node.end_point[0] + 1,
+                base_classes=_extract_csharp_bases(node, src),
             ))
             for child in node.children:
                 walk(child, class_name=name)
@@ -395,11 +486,13 @@ def _extract_generic_symbols(tree, src: bytes) -> list[Symbol]:
         elif node.type in CLASS_NODES:
             name_node = _first_child_of_type(node, "identifier", "type_identifier", "name")
             name = _node_text(name_node, src) if name_node else "<anon>"
+            sig = f"{node.type.replace('_', ' ')} {name}"
             symbols.append(Symbol(
-                name=name, kind="class", signature=f"{node.type.replace('_', ' ')} {name}",
+                name=name, kind="class", signature=sig,
                 docstring=None, body=None,
                 start_line=node.start_point[0] + 1,
                 end_line=node.end_point[0] + 1,
+                base_classes=_bases_from_signature(_node_text(node, src).split("{")[0]),
             ))
         for child in node.children:
             walk(child)

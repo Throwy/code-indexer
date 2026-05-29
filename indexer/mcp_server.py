@@ -159,6 +159,105 @@ def get_file_symbols(file_path: str, directory: str) -> str:
 
 
 @mcp.tool()
+def goto_symbol(
+    name: str,
+    directory: str,
+    kind: Optional[str] = None,
+) -> str:
+    """
+    Find the definition(s) of a symbol by exact name.
+
+    Args:
+        name:      Exact symbol name, e.g. "UserService" or "parse_jwt".
+        directory: Absolute path to the project directory that has been indexed.
+        kind:      Optional filter: "function", "class", "method", "interface", or "struct".
+
+    Returns:
+        File path(s) and line numbers where the symbol is defined.
+    """
+    from .searcher import goto_symbol as _goto
+    target = _resolve(directory)
+    results = _goto(target, name, kind=kind)
+    if not results:
+        return f"No definition found for '{name}'."
+    lines = [f"{len(results)} definition(s) for '{name}':\n"]
+    for i, r in enumerate(results, 1):
+        lines.append(f"{i}. [{r['kind']}] {r['name']}")
+        lines.append(f"   File: {r['path']}, line {r['start_line']}")
+        if r.get("signature"):
+            sig = r["signature"].replace("\n", " ")[:150]
+            lines.append(f"   Signature: {sig}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def find_implementations(
+    name: str,
+    directory: str,
+) -> str:
+    """
+    Find all classes or structs that implement or extend a given interface or base class.
+
+    Args:
+        name:      Name of the interface or base class, e.g. "IRepository" or "BaseHandler".
+        directory: Absolute path to the project directory that has been indexed.
+
+    Returns:
+        List of implementing types with their file paths and line numbers.
+    """
+    from .searcher import find_implementations as _impls
+    target = _resolve(directory)
+    results = _impls(target, name)
+    if not results:
+        return f"No implementations found for '{name}'."
+    lines = [f"{len(results)} implementation(s) of '{name}':\n"]
+    for i, r in enumerate(results, 1):
+        bases = ", ".join(r["base_classes"]) if r["base_classes"] else ""
+        lines.append(f"{i}. [{r['kind']}] {r['name']}  (extends/implements: {bases})")
+        lines.append(f"   File: {r['path']}, line {r['start_line']}")
+        if r.get("signature"):
+            sig = r["signature"].replace("\n", " ")[:150]
+            lines.append(f"   Signature: {sig}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def find_usages(
+    name: str,
+    directory: str,
+    limit: int = 20,
+) -> str:
+    """
+    Find symbols (functions, methods) whose body references or calls NAME.
+    This is an approximate search based on body text, not a full call-graph analysis.
+
+    Args:
+        name:      Symbol name to search for usages, e.g. "parse_jwt" or "UserService".
+        directory: Absolute path to the project directory that has been indexed.
+        limit:     Maximum number of results (default 20).
+
+    Returns:
+        List of symbols that appear to reference NAME, with file paths and line numbers.
+    """
+    from .searcher import find_usages as _refs
+    target = _resolve(directory)
+    results = _refs(target, name, limit=limit)
+    if not results:
+        return f"No references found for '{name}'."
+    lines = [f"{len(results)} reference(s) to '{name}':\n"]
+    for i, r in enumerate(results, 1):
+        lines.append(f"{i}. [{r['kind']}] {r['name']}")
+        lines.append(f"   File: {r['path']}, lines {r['start_line']}–{r['end_line']}")
+        if r.get("signature"):
+            sig = r["signature"].replace("\n", " ")[:150]
+            lines.append(f"   Signature: {sig}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+@mcp.tool()
 def run_index(
     directory: str,
     force: bool = False,
