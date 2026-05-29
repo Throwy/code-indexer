@@ -91,6 +91,112 @@ def search(query, directory, mode, limit, as_json):
 
 
 @cli.command()
+@click.argument("name")
+@click.option("--kind", type=click.Choice(["function", "class", "method", "interface", "struct"]),
+              default=None, help="Restrict to a specific symbol kind.")
+@click.option("--dir", "directory", default=".", type=click.Path(exists=True, file_okay=False),
+              help="Directory whose index to search (default: current dir).")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON.")
+def goto(name, kind, directory, as_json):
+    """Jump to the definition(s) of symbol NAME."""
+    target = Path(directory).resolve()
+    db_path = db_path_for(target)
+    if not db_path.exists():
+        click.echo(f"No index found for {target}. Run `python -m indexer index {directory}` first.", err=True)
+        sys.exit(1)
+
+    from .searcher import goto_symbol
+    results = goto_symbol(target, name, kind=kind)
+
+    if as_json:
+        click.echo(json.dumps(results, indent=2))
+        return
+
+    if not results:
+        click.echo(f"No definition found for '{name}'.")
+        return
+
+    click.echo(f"\n{len(results)} definition(s) for '{name}'\n")
+    for i, r in enumerate(results, 1):
+        click.echo(f"{i:>2}. [{r['kind']}] {r['name']}")
+        click.echo(f"    {r['path']}:{r['start_line']}")
+        if r.get("signature"):
+            sig = r["signature"].replace("\n", " ")[:120]
+            click.echo(f"    {sig}")
+        click.echo()
+
+
+@cli.command()
+@click.argument("name")
+@click.option("--dir", "directory", default=".", type=click.Path(exists=True, file_okay=False),
+              help="Directory whose index to search (default: current dir).")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON.")
+def impls(name, directory, as_json):
+    """Find all types that implement or extend NAME."""
+    target = Path(directory).resolve()
+    db_path = db_path_for(target)
+    if not db_path.exists():
+        click.echo(f"No index found for {target}. Run `python -m indexer index {directory}` first.", err=True)
+        sys.exit(1)
+
+    from .searcher import find_implementations
+    results = find_implementations(target, name)
+
+    if as_json:
+        click.echo(json.dumps(results, indent=2))
+        return
+
+    if not results:
+        click.echo(f"No implementations found for '{name}'.")
+        return
+
+    click.echo(f"\n{len(results)} implementation(s) of '{name}'\n")
+    for i, r in enumerate(results, 1):
+        bases = ", ".join(r["base_classes"]) if r["base_classes"] else ""
+        click.echo(f"{i:>2}. [{r['kind']}] {r['name']}  (extends/implements: {bases})")
+        click.echo(f"    {r['path']}:{r['start_line']}")
+        if r.get("signature"):
+            sig = r["signature"].replace("\n", " ")[:120]
+            click.echo(f"    {sig}")
+        click.echo()
+
+
+@cli.command()
+@click.argument("name")
+@click.option("--dir", "directory", default=".", type=click.Path(exists=True, file_okay=False),
+              help="Directory whose index to search (default: current dir).")
+@click.option("--limit", "-n", default=20, help="Max results (default: 20).")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON.")
+def refs(name, directory, limit, as_json):
+    """Find symbols that reference or call NAME (approximate body search)."""
+    target = Path(directory).resolve()
+    db_path = db_path_for(target)
+    if not db_path.exists():
+        click.echo(f"No index found for {target}. Run `python -m indexer index {directory}` first.", err=True)
+        sys.exit(1)
+
+    from .searcher import find_usages
+    results = find_usages(target, name, limit=limit)
+
+    if as_json:
+        click.echo(json.dumps(results, indent=2))
+        return
+
+    if not results:
+        click.echo(f"No references found for '{name}'.")
+        return
+
+    click.echo(f"\n{len(results)} reference(s) to '{name}'\n")
+    for i, r in enumerate(results, 1):
+        click.echo(f"{i:>2}. [{r['kind']}] {r['name']}")
+        click.echo(f"    {r['path']}:{r['start_line']}-{r['end_line']}")
+        if r.get("signature"):
+            sig = r["signature"].replace("\n", " ")[:120]
+            click.echo(f"    {sig}")
+        click.echo()
+
+
+@cli.command()
 @click.option("--dir", "directory", default=".", type=click.Path(exists=True, file_okay=False),
               help="Directory to inspect.")
 def status(directory):

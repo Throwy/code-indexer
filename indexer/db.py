@@ -24,15 +24,16 @@ CREATE TABLE IF NOT EXISTS files (
 );
 
 CREATE TABLE IF NOT EXISTS symbols (
-    id          INTEGER PRIMARY KEY,
-    file_id     INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
-    name        TEXT    NOT NULL,
-    kind        TEXT    NOT NULL,  -- 'function' | 'class' | 'method' | 'interface' | 'struct'
-    signature   TEXT,
-    docstring   TEXT,
-    body        TEXT,
-    start_line  INTEGER NOT NULL,
-    end_line    INTEGER NOT NULL
+    id           INTEGER PRIMARY KEY,
+    file_id      INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+    name         TEXT    NOT NULL,
+    kind         TEXT    NOT NULL,  -- 'function' | 'class' | 'method' | 'interface' | 'struct'
+    signature    TEXT,
+    docstring    TEXT,
+    body         TEXT,
+    start_line   INTEGER NOT NULL,
+    end_line     INTEGER NOT NULL,
+    base_classes TEXT    -- JSON array of parent class / implemented interface names
 );
 
 CREATE INDEX IF NOT EXISTS idx_symbols_file ON symbols(file_id);
@@ -78,6 +79,15 @@ class DB:
     def _init_schema(self):
         self.conn.executescript(SCHEMA)
         self.conn.commit()
+        self._migrate()
+
+    def _migrate(self):
+        # Add base_classes column to databases created before this feature
+        try:
+            self.conn.execute("ALTER TABLE symbols ADD COLUMN base_classes TEXT")
+            self.conn.commit()
+        except Exception:
+            pass  # Column already exists
 
     # ── File tracking ────────────────────────────────────────────────────────
 
@@ -127,13 +137,16 @@ class DB:
         body: Optional[str],
         start_line: int,
         end_line: int,
+        base_classes: Optional[list] = None,
     ) -> int:
+        import json
+        bases_json = json.dumps(base_classes) if base_classes else None
         cur = self.conn.execute(
             """
-            INSERT INTO symbols (file_id, name, kind, signature, docstring, body, start_line, end_line)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO symbols (file_id, name, kind, signature, docstring, body, start_line, end_line, base_classes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (file_id, name, kind, signature, docstring, body, start_line, end_line),
+            (file_id, name, kind, signature, docstring, body, start_line, end_line, bases_json),
         )
         self.conn.commit()
         return cur.lastrowid
@@ -159,6 +172,41 @@ class DB:
             LIMIT ?
             """,
             (query, limit),
+        ).fetchall()
+
+    # ── Navigation queries ───────────────────────────────────────────────────
+
+    def goto_symbol(self, name: str, kind: Optional[str] = None) -> list[sqlite3.Row]:
+        """Find all definitions of a symbol by exact name."""
+        if kind:
+            return self.conn.execute(
+                "SELECT s.*, f.path FROM symbols s JOIN files f ON f.id = s.file_id "
+                "WHERE s.name = ? AND s.kind = ? ORDER BY f.path, s.start_line",
+                (name, kind),
+            ).fetchall()
+        return self.conn.execute(
+            "SELECT s.*, f.path FROM symbols s JOIN files f ON f.id = s.file_id "
+            "WHERE s.name = ? ORDER BY f.path, s.start_line",
+            (name,),
+        ).fetchall()
+
+    def find_implementations(self, name: str) -> list[sqlite3.Row]:
+        """Find all types (classes/structs) that list `name` in their base_classes."""
+        pattern = f'%"{name}"%'
+        return self.conn.execute(
+            "SELECT s.*, f.path FROM symbols s JOIN files f ON f.id = s.file_id "
+            "WHERE s.base_classes IS NOT NULL AND s.base_classes LIKE ? "
+            "ORDER BY f.path, s.start_line",
+            (pattern,),
+        ).fetchall()
+
+    def find_usages(self, name: str, limit: int = 20) -> list[sqlite3.Row]:
+        """Approximate: find symbols whose body mentions `name` (likely callers/users)."""
+        return self.conn.execute(
+            "SELECT s.*, f.path FROM symbols s JOIN files f ON f.id = s.file_id "
+            "WHERE s.body LIKE ? AND s.name != ? "
+            "ORDER BY f.path, s.start_line LIMIT ?",
+            (f"%{name}%", name, limit),
         ).fetchall()
 
     # ── Stats ────────────────────────────────────────────────────────────────
