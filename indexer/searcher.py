@@ -26,32 +26,32 @@ def _format_result(row: dict, score: Optional[float] = None) -> dict:
     }
 
 
-def fts_search(target_dir: Path, query: str, limit: int = 20) -> list[dict]:
-    db = get_db(target_dir)
+def fts_search(target_dir: Path, query: str, limit: int = 20, branch: Optional[str] = None) -> list[dict]:
+    db = get_db(target_dir, branch=branch)
     rows = db.fts_search(query, limit=limit)
     db.close()
     return [_format_result(dict(r)) for r in rows]
 
 
-def goto_symbol(target_dir: Path, name: str, kind: Optional[str] = None) -> list[dict]:
+def goto_symbol(target_dir: Path, name: str, kind: Optional[str] = None, branch: Optional[str] = None) -> list[dict]:
     """Find all definitions of a symbol by exact name."""
-    db = get_db(target_dir)
+    db = get_db(target_dir, branch=branch)
     rows = db.goto_symbol(name, kind=kind)
     db.close()
     return [_format_result(dict(r)) for r in rows]
 
 
-def find_implementations(target_dir: Path, name: str) -> list[dict]:
+def find_implementations(target_dir: Path, name: str, branch: Optional[str] = None) -> list[dict]:
     """Find all types that declare `name` as a base class or implemented interface."""
-    db = get_db(target_dir)
+    db = get_db(target_dir, branch=branch)
     rows = db.find_implementations(name)
     db.close()
     return [_format_result(dict(r)) for r in rows]
 
 
-def find_usages(target_dir: Path, name: str, limit: int = 20) -> list[dict]:
+def find_usages(target_dir: Path, name: str, limit: int = 20, branch: Optional[str] = None) -> list[dict]:
     """Approximate: find symbols whose body mentions `name`."""
-    db = get_db(target_dir)
+    db = get_db(target_dir, branch=branch)
     rows = db.find_usages(name, limit=limit)
     db.close()
     return [_format_result(dict(r)) for r in rows]

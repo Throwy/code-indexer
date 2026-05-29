@@ -14,7 +14,7 @@ from pathlib import Path
 
 import click
 
-from .indexer import index_directory, get_db, db_path_for
+from .indexer import index_directory, index_branch, get_db, db_path_for
 
 
 @click.group()
@@ -27,16 +27,21 @@ def cli():
 @click.argument("directory", default=".", type=click.Path(exists=True, file_okay=False))
 @click.option("--force", is_flag=True, help="Re-index all files even if unchanged.")
 @click.option("--verbose", "-v", is_flag=True, help="Print per-file progress.")
-def index(directory, force, verbose):
+@click.option("--branch", default=None, help="Index a specific git branch instead of the working tree.")
+def index(directory, force, verbose, branch):
     """Index source files in DIRECTORY (default: current dir)."""
     target = Path(directory).resolve()
-    click.echo(f"Indexing {target} ...")
 
-    stats = index_directory(
-        target_dir=target,
-        force=force,
-        verbose=verbose,
-    )
+    if branch:
+        click.echo(f"Indexing branch '{branch}' in {target} ...")
+        try:
+            stats = index_branch(target_dir=target, branch=branch, force=force, verbose=verbose)
+        except ValueError as e:
+            click.echo(str(e), err=True)
+            sys.exit(1)
+    else:
+        click.echo(f"Indexing {target} ...")
+        stats = index_directory(target_dir=target, force=force, verbose=verbose)
 
     click.echo("\nDone.")
     click.echo(f"  Files scanned:  {stats['files_scanned']}")
@@ -55,18 +60,20 @@ def index(directory, force, verbose):
               help="Search mode.")
 @click.option("--limit", "-n", default=10, help="Max results (default: 10).")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON.")
-def search(query, directory, mode, limit, as_json):
+@click.option("--branch", default=None, help="Search the index for a specific branch.")
+def search(query, directory, mode, limit, as_json, branch):
     """Search the index for QUERY."""
     target = Path(directory).resolve()
-    db_path = db_path_for(target)
+    db_path = db_path_for(target, branch=branch)
 
     if not db_path.exists():
-        click.echo(f"No index found for {target}. Run `python -m indexer index {directory}` first.", err=True)
+        hint = f" --branch {branch}" if branch else ""
+        click.echo(f"No index found for {target}{' branch ' + branch if branch else ''}. Run `python -m indexer index{hint} {directory}` first.", err=True)
         sys.exit(1)
 
     from .searcher import fts_search
 
-    results = fts_search(target, query, limit=limit)
+    results = fts_search(target, query, limit=limit, branch=branch)
 
     if as_json:
         click.echo(json.dumps(results, indent=2))
@@ -97,16 +104,18 @@ def search(query, directory, mode, limit, as_json):
 @click.option("--dir", "directory", default=".", type=click.Path(exists=True, file_okay=False),
               help="Directory whose index to search (default: current dir).")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON.")
-def goto(name, kind, directory, as_json):
+@click.option("--branch", default=None, help="Search the index for a specific branch.")
+def goto(name, kind, directory, as_json, branch):
     """Jump to the definition(s) of symbol NAME."""
     target = Path(directory).resolve()
-    db_path = db_path_for(target)
+    db_path = db_path_for(target, branch=branch)
     if not db_path.exists():
-        click.echo(f"No index found for {target}. Run `python -m indexer index {directory}` first.", err=True)
+        hint = f" --branch {branch}" if branch else ""
+        click.echo(f"No index found for {target}{' branch ' + branch if branch else ''}. Run `python -m indexer index{hint} {directory}` first.", err=True)
         sys.exit(1)
 
     from .searcher import goto_symbol
-    results = goto_symbol(target, name, kind=kind)
+    results = goto_symbol(target, name, kind=kind, branch=branch)
 
     if as_json:
         click.echo(json.dumps(results, indent=2))
@@ -131,16 +140,18 @@ def goto(name, kind, directory, as_json):
 @click.option("--dir", "directory", default=".", type=click.Path(exists=True, file_okay=False),
               help="Directory whose index to search (default: current dir).")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON.")
-def impls(name, directory, as_json):
+@click.option("--branch", default=None, help="Search the index for a specific branch.")
+def impls(name, directory, as_json, branch):
     """Find all types that implement or extend NAME."""
     target = Path(directory).resolve()
-    db_path = db_path_for(target)
+    db_path = db_path_for(target, branch=branch)
     if not db_path.exists():
-        click.echo(f"No index found for {target}. Run `python -m indexer index {directory}` first.", err=True)
+        hint = f" --branch {branch}" if branch else ""
+        click.echo(f"No index found for {target}{' branch ' + branch if branch else ''}. Run `python -m indexer index{hint} {directory}` first.", err=True)
         sys.exit(1)
 
     from .searcher import find_implementations
-    results = find_implementations(target, name)
+    results = find_implementations(target, name, branch=branch)
 
     if as_json:
         click.echo(json.dumps(results, indent=2))
@@ -167,16 +178,18 @@ def impls(name, directory, as_json):
               help="Directory whose index to search (default: current dir).")
 @click.option("--limit", "-n", default=20, help="Max results (default: 20).")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON.")
-def refs(name, directory, limit, as_json):
+@click.option("--branch", default=None, help="Search the index for a specific branch.")
+def refs(name, directory, limit, as_json, branch):
     """Find symbols that reference or call NAME (approximate body search)."""
     target = Path(directory).resolve()
-    db_path = db_path_for(target)
+    db_path = db_path_for(target, branch=branch)
     if not db_path.exists():
-        click.echo(f"No index found for {target}. Run `python -m indexer index {directory}` first.", err=True)
+        hint = f" --branch {branch}" if branch else ""
+        click.echo(f"No index found for {target}{' branch ' + branch if branch else ''}. Run `python -m indexer index{hint} {directory}` first.", err=True)
         sys.exit(1)
 
     from .searcher import find_usages
-    results = find_usages(target, name, limit=limit)
+    results = find_usages(target, name, limit=limit, branch=branch)
 
     if as_json:
         click.echo(json.dumps(results, indent=2))
@@ -199,20 +212,26 @@ def refs(name, directory, limit, as_json):
 @cli.command()
 @click.option("--dir", "directory", default=".", type=click.Path(exists=True, file_okay=False),
               help="Directory to inspect.")
-def status(directory):
+@click.option("--branch", default=None, help="Show stats for a specific branch index.")
+def status(directory, branch):
     """Show index statistics for DIRECTORY."""
     target = Path(directory).resolve()
-    db_path = db_path_for(target)
+    db_path = db_path_for(target, branch=branch)
 
     if not db_path.exists():
-        click.echo(f"No index found for {target}.")
+        msg = f"No index found for {target}"
+        if branch:
+            msg += f" branch '{branch}'"
+        click.echo(msg + ".")
         return
 
-    db = get_db(target)
+    db = get_db(target, branch=branch)
     s = db.stats()
     db.close()
 
     click.echo(f"\nIndex: {db_path}")
+    if branch:
+        click.echo(f"Branch: {branch}")
     click.echo(f"  Files:    {s['files']}")
     click.echo(f"  Symbols:  {s['symbols']}")
     if s["languages"]:
