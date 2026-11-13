@@ -39,7 +39,7 @@ This creates a `.code-index.db` file inside the target directory.
 
 Options:
 - `--force`           Re-index all files even if unchanged
-- `-v`                Verbose per-file output
+- `-v`                Per-file progress (`-vv` for debug; see [Verbosity](#11-verbosity-and-logging))
 - `--branch <name>`   Index a specific git branch instead of the working tree
 
 ```bash
@@ -95,11 +95,45 @@ code-indexer refs parse_jwt --dir /path/to/myproject
 code-indexer refs UserService --dir /path/to/myproject -n 30
 ```
 
-All three commands accept `--branch <name>` and `--json` flags.
+All three commands accept `--branch <name>`, `--repo <name>` and `--json` flags.
 
 ---
 
-## 6. Index status
+## 6. Multiple repos in one directory
+
+Point the indexer at a parent folder that contains several git repos and it
+builds a single index across all of them:
+
+```bash
+code-indexer index ~/dev
+code-indexer repos --dir ~/dev          # list discovered repos with file/symbol counts
+```
+
+- Repos are discovered up to 3 levels below the folder (hidden dirs and ignored
+  dirs like `node_modules` are skipped; the walk doesn't descend into a repo
+  once found). Each file is tagged with its repo, named by its path relative to
+  the parent (e.g. `api` or `group/beta`).
+- Paths in results include the repo prefix, e.g. `api/src/auth.py`.
+- Restrict any search to one repo with `--repo`:
+
+```bash
+code-indexer search "UserService" --dir ~/dev --repo api
+code-indexer goto UserService --dir ~/dev --repo group/beta
+code-indexer impls IRepository --dir ~/dev --repo api
+code-indexer refs parse_jwt --dir ~/dev --repo api
+```
+
+- If the folder you index is itself a git repo, nothing changes: it is indexed
+  as a single repo with no repo tags.
+- Indexes created before this feature upgrade automatically; unchanged files
+  just get their repo tag filled in on the next `index` run.
+- Limitations: only the built-in ignore list is applied (per-repo `.gitignore`
+  files are not read), and `--branch` works on a single repo directory, not on
+  a parent folder of repos.
+
+---
+
+## 7. Index status
 
 ```bash
 code-indexer status --dir /path/to/myproject
@@ -110,7 +144,7 @@ code-indexer status --dir /path/to/myproject --branch feature/auth
 
 ---
 
-## 7. Connect to Claude Desktop (MCP)
+## 8. Connect to Claude Desktop (MCP)
 
 Add the following to your Claude Desktop config file.
 
@@ -136,13 +170,17 @@ Restart Claude Desktop after editing. You should see "code-indexer" in the MCP t
 
 | Tool | Description |
 |------|-------------|
-| `search_code` | Full-text keyword search across an indexed project |
+| `search_code` | Full-text keyword search across an indexed project (optional `repo` filter) |
 | `index_status` | Check if a directory is indexed and see stats |
 | `get_file_symbols` | List all functions/classes in a specific file |
-| `goto_symbol` | Find the definition(s) of a symbol by exact name |
-| `find_implementations` | Find all types that implement or extend a base class/interface |
-| `find_usages` | Find symbols whose body references a given name (approximate) |
+| `goto_symbol` | Find the definition(s) of a symbol by exact name (optional `repo` filter) |
+| `find_implementations` | Find all types that implement or extend a base class/interface (optional `repo` filter) |
+| `find_usages` | Find symbols whose body references a given name (approximate; optional `repo` filter) |
 | `run_index` | Trigger indexing of a directory from within Claude |
+| `list_repos` | List the git repos found under an indexed parent directory |
+| `list_indexes` | List every stored index with its directory, branch, size and staleness |
+| `clean_index` | Delete the index for a directory (or one branch / all branches) |
+| `clean_stale_indexes` | Remove indexes whose directory or branch is gone (dry run by default) |
 
 ### Example Claude prompts once connected:
 
@@ -151,12 +189,92 @@ Restart Claude Desktop after editing. You should see "code-indexer" in the MCP t
 - *"Show me all the symbols in src/api/auth.ts"*
 - *"What classes implement IRepository?"*
 - *"Where is parse_jwt defined?"*
+- *"Index ~/dev and find UserService in the api repo"*
 
 ---
 
-## 8. Re-indexing
+## 9. Re-indexing
 
 Re-run `code-indexer index <dir>` any time files change. Only modified files
 are re-processed, so incremental re-indexes are fast.
 
 For automatic re-indexing you could set up a file watcher or a scheduled task.
+
+---
+
+## 10. Cleaning up indexes
+
+Indexes live in one store (`%LOCALAPPDATA%\code-indexer` on Windows,
+`$XDG_CACHE_HOME/code-indexer` or `~/.cache/code-indexer` elsewhere), outside
+your projects. They are safe to delete; re-running `index` rebuilds them.
+
+```bash
+# See everything in the store: origin, branch, size, and which are stale
+code-indexer indexes
+
+# Delete the working-tree index for a directory (it need not exist any more)
+code-indexer clean --dir /path/to/myproject
+
+# Delete one branch's index, or the working-tree index plus every branch index
+code-indexer clean --dir /path/to/myproject --branch feature/auth
+code-indexer clean --dir /path/to/myproject --all-branches
+
+# Delete indexes whose directory or branch no longer exists (and unreadable ones)
+code-indexer clean --stale
+
+# Delete everything
+code-indexer clean --all
+```
+
+- Add `--dry-run` to any `clean` to preview what would be removed and the space
+  freed. `--stale` and `--all` ask for confirmation unless you pass `-y`.
+- Choose exactly one of `--dir`, `--stale` or `--all`.
+- Staleness is judged from the directory and branch recorded in each index.
+  Indexes created before this feature show an "unknown origin" and are never
+  treated as stale; re-run `index` on that directory to record it (or remove
+  them with `clean --dir` / `clean --all`).
+- If an index is open in another process (e.g. the MCP server mid-search),
+  Windows may refuse to delete it; the command reports it and you can retry.
+
+---
+
+## 11. Verbosity and logging
+
+Every command accepts `-v` / `--verbose` (repeat it for more) and `-q` / `--quiet`.
+The flag works before or after the subcommand: `code-indexer -v index .` and
+`code-indexer index . -v` are the same.
+
+| Flag | Level | What you see |
+|------|-------|--------------|
+| `-q` | quiet | Errors only; `index` and `clean` skip their summaries |
+| *(none)* | default | Warnings and errors, plus each command's normal output |
+| `-v` | verbose | Per-file progress: `index`, `skip`, `error`, stale removals |
+| `-vv` | debug | Also database paths, discovered repos, file counts, query timings, index/clean decisions, and tracebacks for files that fail to parse |
+
+```bash
+code-indexer index ~/dev -v            # per-file progress
+code-indexer index ~/dev -vv           # + repos found, timings, DB path
+code-indexer search "UserService" --dir ~/dev -vv     # + query timing and row counts
+code-indexer clean --stale --dry-run -vv              # + why each index counts as stale
+```
+
+- Logs go to **stderr**; results and summaries stay on stdout, so
+  `code-indexer search ... --json -vv > out.json` still produces clean JSON.
+- Set a default with the `CODE_INDEXER_VERBOSITY` environment variable
+  (`quiet`, `warning`, `info`, `debug`, or `-1` to `2`). Flags override it, and
+  `-q` always wins.
+- The MCP server takes the same flags. Claude Desktop shows its stderr in the
+  MCP log, so this is the way to see what it is doing:
+
+```json
+{
+  "mcpServers": {
+    "code-indexer": {
+      "command": "code-indexer-mcp",
+      "args": ["-vv"]
+    }
+  }
+}
+```
+
+(or set `"env": { "CODE_INDEXER_VERBOSITY": "debug" }` instead of `args`).

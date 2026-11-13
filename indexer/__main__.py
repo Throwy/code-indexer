@@ -8,46 +8,69 @@ Usage:
     python -m indexer status
 """
 
+import functools
 import json
 import sys
 from pathlib import Path
 
 import click
 
+from . import log as _log
 from .indexer import index_directory, index_branch, get_db, db_path_for
 
 
+def verbosity_options(f):
+    """Add -v/--verbose (repeatable) and -q/--quiet to a command and apply them."""
+    @click.option("--verbose", "-v", count=True,
+                  help="More output: -v per-file progress, -vv debug (timings, paths, tracebacks). Logs go to stderr.")
+    @click.option("--quiet", "-q", is_flag=True, help="Suppress progress and summary output; errors still show.")
+    @functools.wraps(f)
+    def wrapper(*args, verbose=0, quiet=False, **kwargs):
+        _log.configure(verbose, quiet)
+        return f(*args, **kwargs)
+    return wrapper
+
+
 @click.group()
-def cli():
+@click.option("--verbose", "-v", count=True,
+              help="More output: -v per-file progress, -vv debug. Also accepted after the subcommand.")
+@click.option("--quiet", "-q", is_flag=True, help="Suppress progress and summary output; errors still show.")
+def cli(verbose, quiet):
     """code-indexer — index and search your codebase locally."""
-    pass
+    _log.configure(verbose, quiet, from_group=True)
 
 
 @cli.command()
 @click.argument("directory", default=".", type=click.Path(exists=True, file_okay=False))
 @click.option("--force", is_flag=True, help="Re-index all files even if unchanged.")
-@click.option("--verbose", "-v", is_flag=True, help="Print per-file progress.")
 @click.option("--branch", default=None, help="Index a specific git branch instead of the working tree.")
-def index(directory, force, verbose, branch):
+@verbosity_options
+def index(directory, force, branch):
     """Index source files in DIRECTORY (default: current dir)."""
     target = Path(directory).resolve()
 
+    quiet = _log.get_level() < 0
     if branch:
-        click.echo(f"Indexing branch '{branch}' in {target} ...")
+        if not quiet:
+            click.echo(f"Indexing branch '{branch}' in {target} ...")
         try:
-            stats = index_branch(target_dir=target, branch=branch, force=force, verbose=verbose)
+            stats = index_branch(target_dir=target, branch=branch, force=force)
         except ValueError as e:
             click.echo(str(e), err=True)
             sys.exit(1)
     else:
-        click.echo(f"Indexing {target} ...")
-        stats = index_directory(target_dir=target, force=force, verbose=verbose)
+        if not quiet:
+            click.echo(f"Indexing {target} ...")
+        stats = index_directory(target_dir=target, force=force)
 
-    click.echo("\nDone.")
-    click.echo(f"  Files scanned:  {stats['files_scanned']}")
-    click.echo(f"  Files indexed:  {stats['files_indexed']}")
-    click.echo(f"  Files skipped:  {stats['files_skipped']} (unchanged)")
-    click.echo(f"  Symbols added:  {stats['symbols_added']}")
+    if not quiet:
+        click.echo("\nDone.")
+        click.echo(f"  Files scanned:  {stats['files_scanned']}")
+        click.echo(f"  Files indexed:  {stats['files_indexed']}")
+        click.echo(f"  Files skipped:  {stats['files_skipped']} (unchanged)")
+        click.echo(f"  Symbols added:  {stats['symbols_added']}")
+        if stats.get("repos"):
+            click.echo(f"  Repos found:    {stats['repos']}")
     if stats["errors"]:
         click.echo(f"  Errors:         {stats['errors']}", err=True)
 
@@ -61,7 +84,9 @@ def index(directory, force, verbose, branch):
 @click.option("--limit", "-n", default=10, help="Max results (default: 10).")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON.")
 @click.option("--branch", default=None, help="Search the index for a specific branch.")
-def search(query, directory, mode, limit, as_json, branch):
+@click.option("--repo", default=None, help="Restrict to one repo (when the directory holds several).")
+@verbosity_options
+def search(query, directory, mode, limit, as_json, branch, repo):
     """Search the index for QUERY."""
     target = Path(directory).resolve()
     db_path = db_path_for(target, branch=branch)
@@ -73,7 +98,7 @@ def search(query, directory, mode, limit, as_json, branch):
 
     from .searcher import fts_search
 
-    results = fts_search(target, query, limit=limit, branch=branch)
+    results = fts_search(target, query, limit=limit, branch=branch, repo=repo)
 
     if as_json:
         click.echo(json.dumps(results, indent=2))
@@ -105,7 +130,9 @@ def search(query, directory, mode, limit, as_json, branch):
               help="Directory whose index to search (default: current dir).")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON.")
 @click.option("--branch", default=None, help="Search the index for a specific branch.")
-def goto(name, kind, directory, as_json, branch):
+@click.option("--repo", default=None, help="Restrict to one repo (when the directory holds several).")
+@verbosity_options
+def goto(name, kind, directory, as_json, branch, repo):
     """Jump to the definition(s) of symbol NAME."""
     target = Path(directory).resolve()
     db_path = db_path_for(target, branch=branch)
@@ -115,7 +142,7 @@ def goto(name, kind, directory, as_json, branch):
         sys.exit(1)
 
     from .searcher import goto_symbol
-    results = goto_symbol(target, name, kind=kind, branch=branch)
+    results = goto_symbol(target, name, kind=kind, branch=branch, repo=repo)
 
     if as_json:
         click.echo(json.dumps(results, indent=2))
@@ -141,7 +168,9 @@ def goto(name, kind, directory, as_json, branch):
               help="Directory whose index to search (default: current dir).")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON.")
 @click.option("--branch", default=None, help="Search the index for a specific branch.")
-def impls(name, directory, as_json, branch):
+@click.option("--repo", default=None, help="Restrict to one repo (when the directory holds several).")
+@verbosity_options
+def impls(name, directory, as_json, branch, repo):
     """Find all types that implement or extend NAME."""
     target = Path(directory).resolve()
     db_path = db_path_for(target, branch=branch)
@@ -151,7 +180,7 @@ def impls(name, directory, as_json, branch):
         sys.exit(1)
 
     from .searcher import find_implementations
-    results = find_implementations(target, name, branch=branch)
+    results = find_implementations(target, name, branch=branch, repo=repo)
 
     if as_json:
         click.echo(json.dumps(results, indent=2))
@@ -179,7 +208,9 @@ def impls(name, directory, as_json, branch):
 @click.option("--limit", "-n", default=20, help="Max results (default: 20).")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON.")
 @click.option("--branch", default=None, help="Search the index for a specific branch.")
-def refs(name, directory, limit, as_json, branch):
+@click.option("--repo", default=None, help="Restrict to one repo (when the directory holds several).")
+@verbosity_options
+def refs(name, directory, limit, as_json, branch, repo):
     """Find symbols that reference or call NAME (approximate body search)."""
     target = Path(directory).resolve()
     db_path = db_path_for(target, branch=branch)
@@ -189,7 +220,7 @@ def refs(name, directory, limit, as_json, branch):
         sys.exit(1)
 
     from .searcher import find_usages
-    results = find_usages(target, name, limit=limit, branch=branch)
+    results = find_usages(target, name, limit=limit, branch=branch, repo=repo)
 
     if as_json:
         click.echo(json.dumps(results, indent=2))
@@ -213,6 +244,7 @@ def refs(name, directory, limit, as_json, branch):
 @click.option("--dir", "directory", default=".", type=click.Path(exists=True, file_okay=False),
               help="Directory to inspect.")
 @click.option("--branch", default=None, help="Show stats for a specific branch index.")
+@verbosity_options
 def status(directory, branch):
     """Show index statistics for DIRECTORY."""
     target = Path(directory).resolve()
@@ -234,10 +266,129 @@ def status(directory, branch):
         click.echo(f"Branch: {branch}")
     click.echo(f"  Files:    {s['files']}")
     click.echo(f"  Symbols:  {s['symbols']}")
+    if s["repos"]:
+        click.echo(f"  Repos:    {s['repos']}")
     if s["languages"]:
         click.echo("  Languages:")
         for lang, count in s["languages"]:
             click.echo(f"    {lang:<15} {count} files")
+
+
+@cli.command("repos")
+@click.option("--dir", "directory", default=".", type=click.Path(exists=True, file_okay=False),
+              help="Parent directory whose index to inspect (default: current dir).")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON.")
+@verbosity_options
+def repos_cmd(directory, as_json):
+    """List the git repos recorded in the index for DIRECTORY."""
+    target = Path(directory).resolve()
+    if not db_path_for(target).exists():
+        click.echo(f"No index found for {target}.")
+        return
+    from .searcher import list_repos
+    rows = list_repos(target)
+    if as_json:
+        click.echo(json.dumps(rows, indent=2))
+        return
+    if not rows:
+        click.echo("No repos recorded (single-repo index, or re-index needed).")
+        return
+    click.echo(f"\n{len(rows)} repo(s):\n")
+    for r in rows:
+        click.echo(f"  {r['repo']:<30} {r['files']} files, {r['symbols']} symbols")
+
+
+def _fmt_size(n: int) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+
+
+def _print_indexes(infos: list[dict]):
+    import datetime
+    for i in infos:
+        where = i["root"] or "(unknown origin - re-index to record it)"
+        branch = f"  branch={i['branch']}" if i["branch"] else ""
+        when = (datetime.datetime.fromtimestamp(i["indexed_at"] or i["modified"])
+                .strftime("%Y-%m-%d %H:%M"))
+        counts = f"{i['files']} files, {i['symbols']} symbols" if i["files"] is not None else "unreadable"
+        click.echo(f"  {i['name']}  {where}{branch}")
+        click.echo(f"    {counts}  |  {_fmt_size(i['size'])}  |  {when}")
+        if i.get("stale_reason"):
+            click.echo(f"    STALE: {i['stale_reason']}")
+
+
+@cli.command("indexes")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON.")
+@verbosity_options
+def indexes_cmd(as_json):
+    """List every index in the store, with size, origin and staleness."""
+    from .indexer import list_indexes, _index_store_dir
+    infos = list_indexes()
+    if as_json:
+        click.echo(json.dumps([{**i, "path": str(i["path"])} for i in infos], indent=2))
+        return
+    if not infos:
+        click.echo(f"No indexes in {_index_store_dir()}.")
+        return
+    total = sum(i["size"] for i in infos)
+    click.echo(f"\n{len(infos)} index(es) in {_index_store_dir()}  ({_fmt_size(total)} total)\n")
+    _print_indexes(infos)
+
+
+@cli.command()
+@click.option("--dir", "directory", default=None, type=click.Path(file_okay=False),
+              help="Remove the index for this directory (it need not exist any more).")
+@click.option("--branch", default=None, help="With --dir: remove that branch's index instead.")
+@click.option("--all-branches", is_flag=True, help="With --dir: remove the working-tree index and every branch index.")
+@click.option("--stale", is_flag=True, help="Remove indexes whose directory or branch no longer exists, and unreadable ones.")
+@click.option("--all", "everything", is_flag=True, help="Remove every index in the store.")
+@click.option("--dry-run", is_flag=True, help="Show what would be removed without deleting anything.")
+@click.option("--yes", "-y", is_flag=True, help="Skip the confirmation for --stale / --all.")
+@verbosity_options
+def clean(directory, branch, all_branches, stale, everything, dry_run, yes):
+    """Delete indexes. Choose one of --dir, --stale or --all."""
+    from .indexer import clean_indexes
+
+    scopes = [directory is not None, stale, everything]
+    if sum(scopes) != 1:
+        click.echo("Choose exactly one of --dir, --stale or --all.", err=True)
+        sys.exit(2)
+    if (branch or all_branches) and directory is None:
+        click.echo("--branch / --all-branches only apply together with --dir.", err=True)
+        sys.exit(2)
+    if branch and all_branches:
+        click.echo("Use either --branch or --all-branches, not both.", err=True)
+        sys.exit(2)
+
+    kwargs = dict(directory=Path(directory) if directory else None, branch=branch,
+                  all_branches=all_branches, stale=stale, everything=everything)
+    preview = clean_indexes(dry_run=True, **kwargs)
+    if not preview:
+        click.echo("Nothing to clean.")
+        return
+
+    quiet = _log.get_level() < 0 and not dry_run
+    needs_confirm = (stale or everything) and not yes and not dry_run
+    if not quiet or needs_confirm:  # never ask for confirmation without showing what is affected
+        click.echo(f"\n{'Would remove' if dry_run else 'Removing'} {len(preview)} index(es):\n")
+        _print_indexes(preview)
+    if dry_run:
+        click.echo(f"\nDry run - {_fmt_size(sum(i['size'] for i in preview))} would be freed.")
+        return
+    if (stale or everything) and not yes:
+        click.confirm("\nProceed?", abort=True)
+
+    done = clean_indexes(**kwargs)
+    freed = sum(i["size"] for i in done if i["removed"])
+    failed = [i for i in done if not i["removed"]]
+    if not quiet:
+        click.echo(f"\nRemoved {len(done) - len(failed)} index(es), freed {_fmt_size(freed)}.")
+    for i in failed:
+        click.echo(f"  could not remove {i['name']}: {i['error']}", err=True)
+    if failed:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

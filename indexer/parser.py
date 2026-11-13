@@ -11,6 +11,8 @@ from typing import Optional
 import json
 import re
 
+from .log import logger
+
 try:
     from tree_sitter import Language, Parser, Node
     import tree_sitter_python as ts_python
@@ -99,7 +101,7 @@ def _get_languages() -> dict[str, Language]:
         langs["c"] = Language(ts_c.language())
         langs["cpp"] = Language(ts_cpp.language())
     except Exception as e:
-        print(f"Warning: some tree-sitter languages failed to load: {e}")
+        logger.warning(f"some tree-sitter languages failed to load: {e}")
     return langs
 
 
@@ -542,10 +544,14 @@ def parse_file(path: Path) -> list[Symbol]:
 
 
 def iter_source_files(root: Path) -> list[Path]:
-    """Walk a directory tree, skipping common noise dirs, returning indexable files."""
+    """Walk a directory tree, pruning common noise dirs, returning indexable files."""
+    import os
     results = []
-    for p in root.rglob("*"):
-        if p.is_file() and p.suffix.lower() in EXTENSION_TO_LANGUAGE:
-            if not any(part in IGNORED_DIRS for part in p.parts):
+    for dirpath, dirnames, filenames in os.walk(root):
+        # Prune in place so we never descend into node_modules, .git, etc.
+        dirnames[:] = [d for d in dirnames if d not in IGNORED_DIRS]
+        for name in filenames:
+            p = Path(dirpath) / name
+            if p.suffix.lower() in EXTENSION_TO_LANGUAGE:
                 results.append(p)
     return results
