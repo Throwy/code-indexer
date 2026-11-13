@@ -65,7 +65,11 @@ def search_code(
     Search an indexed codebase for symbols matching the query.
 
     Args:
-        query:     Keyword query, e.g. "parse JWT token" or "UserService".
+        query:     Keyword query, e.g. "parse JWT token" or "UserService". Terms are
+                   OR-ed, so a symbol matches if it contains any of them; symbols
+                   matching more terms rank higher. A trailing * does prefix
+                   matching (e.g. "User*"). Pass several related terms in one
+                   call rather than one call per term.
         directory: Absolute path to the project directory that has been indexed.
         limit:     Maximum number of results to return (default 10).
         repo:      Optional repo name to restrict results to (see list_repos).

@@ -127,9 +127,10 @@ code-indexer refs parse_jwt --dir ~/dev --repo api
   as a single repo with no repo tags.
 - Indexes created before this feature upgrade automatically; unchanged files
   just get their repo tag filled in on the next `index` run.
-- Limitations: only the built-in ignore list is applied (per-repo `.gitignore`
-  files are not read), and `--branch` works on a single repo directory, not on
-  a parent folder of repos.
+- Each repo's `.gitignore` (plus `.git/info/exclude` and your global excludes
+  file) is respected, along with the built-in ignore list.
+- Limitation: `--branch` works on a single repo directory, not on a parent
+  folder of repos.
 
 ---
 

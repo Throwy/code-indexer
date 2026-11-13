@@ -203,7 +203,28 @@ class DB:
 
     # ── Full-text search ─────────────────────────────────────────────────────
 
+    @staticmethod
+    def _fts_query(query: str) -> str:
+        """Turn free text into an FTS5 OR query with each term quoted.
+
+        Quoting stops punctuation (``-``, ``:``, ``.``) from being parsed as FTS5
+        syntax. OR-ing means a symbol needs only one term to match, and bm25 still
+        ranks symbols that match more terms higher. A trailing ``*`` is kept
+        outside the quotes so prefix search still works (``User*``).
+        """
+        parts = []
+        for t in query.split():
+            prefix = t.endswith("*")
+            t = t.rstrip("*")
+            if not t:
+                continue
+            parts.append('"' + t.replace('"', '""') + '"' + ("*" if prefix else ""))
+        return " OR ".join(parts)
+
     def fts_search(self, query: str, limit: int = 20, repo: Optional[str] = None) -> list[sqlite3.Row]:
+        match = self._fts_query(query)
+        if not match:
+            return []
         sql = (
             "SELECT s.*, f.path, f.repo, rank "
             "FROM symbols_fts "
@@ -211,7 +232,7 @@ class DB:
             "JOIN files f ON f.id = s.file_id "
             "WHERE symbols_fts MATCH ?"
         )
-        params: list = [query]
+        params: list = [match]
         if repo:
             sql += " AND f.repo = ?"
             params.append(repo)

@@ -543,15 +543,80 @@ def parse_file(path: Path) -> list[Symbol]:
     return parse_content(src, lang_name)
 
 
-def iter_source_files(root: Path) -> list[Path]:
-    """Walk a directory tree, pruning common noise dirs, returning indexable files."""
+def _is_indexable(rel: Path) -> bool:
+    return (rel.suffix.lower() in EXTENSION_TO_LANGUAGE
+            and not any(part in IGNORED_DIRS for part in rel.parts))
+
+
+def _git_listed_files(directory: Path) -> Optional[list[str]]:
+    """
+    Paths under `directory` (relative to it) that git doesn't ignore: tracked files
+    plus untracked files not excluded by .gitignore, .git/info/exclude or the global
+    excludes file. Nested repos show up as a single "name/" entry.
+    Returns None if `directory` isn't inside a git work tree or git isn't available.
+    """
+    import subprocess
+    try:
+        r = subprocess.run(
+            ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+            cwd=directory, capture_output=True,
+        )
+    except OSError:
+        return None
+    if r.returncode != 0:
+        return None
+    out = r.stdout.decode("utf-8", errors="surrogateescape")
+    return [p for p in out.split("\0") if p]
+
+
+def _iter_git_files(root: Path, results: list[Path]) -> bool:
+    """Collect non-ignored files under `root` via git. Returns False if `root` isn't in a repo."""
+    listed = _git_listed_files(root)
+    if listed is None:
+        return False
+    seen: set[str] = set()
+    for entry in listed:
+        entry = entry.rstrip("/")
+        if entry in seen:
+            continue  # --cached and --others can both list a path (e.g. unmerged)
+        seen.add(entry)
+        rel = Path(entry)
+        p = root / rel
+        if p.is_dir():
+            # Nested repo or submodule: index it with its own ignore rules
+            if (p / ".git").exists() and not any(part in IGNORED_DIRS for part in rel.parts):
+                _walk(p, results)
+            continue
+        if _is_indexable(rel) and p.is_file():  # is_file drops tracked-but-deleted files
+            results.append(p)
+    return True
+
+
+def _walk(root: Path, results: list[Path]) -> None:
     import os
-    results = []
+    if _iter_git_files(root, results):
+        return
+    # Not inside a git repo: plain walk, handing any repos we find to git
     for dirpath, dirnames, filenames in os.walk(root):
         # Prune in place so we never descend into node_modules, .git, etc.
         dirnames[:] = [d for d in dirnames if d not in IGNORED_DIRS]
+        here = Path(dirpath)
+        repo_dirs = [d for d in dirnames if (here / d / ".git").exists()]
+        for d in repo_dirs:
+            _walk(here / d, results)
+        dirnames[:] = [d for d in dirnames if d not in repo_dirs]
         for name in filenames:
-            p = Path(dirpath) / name
+            p = here / name
             if p.suffix.lower() in EXTENSION_TO_LANGUAGE:
                 results.append(p)
+
+
+def iter_source_files(root: Path) -> list[Path]:
+    """
+    Return indexable files under `root`. Inside git repos this respects .gitignore
+    (plus .git/info/exclude and the global excludes file); the built-in IGNORED_DIRS
+    list is applied everywhere on top of that.
+    """
+    results: list[Path] = []
+    _walk(root, results)
     return results
