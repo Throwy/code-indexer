@@ -63,7 +63,25 @@ code-indexer search "parse token" --dir /path/to/myproject -n 20
 
 # Search a specific branch's index
 code-indexer search "UserService" --dir /path/to/myproject --branch feature/auth
+
+# Prefix (wildcard) search
+code-indexer search "User*" --dir /path/to/myproject
 ```
+
+### Query syntax
+
+- **Terms are OR-ed.** A symbol matches if it contains *any* of the terms in its
+  name, signature, docstring, or body. Symbols that match more terms rank higher,
+  so `"parse JWT token"` puts symbols containing all three at the top.
+- **Trailing `*` matches a prefix.** `User*` matches `UserService`, `UserRepo`,
+  etc. Only a trailing `*` counts; a `*` elsewhere is searched as literal text,
+  and a bare `*` is ignored.
+- **Punctuation is safe.** Each term is quoted before it reaches SQLite FTS5, so
+  terms like `foo-bar` or `a:b` are searched as text instead of being parsed as
+  FTS5 operators. This also means raw FTS5 syntax (`AND`, `NEAR`, `-term`,
+  column filters) isn't supported; those are searched as ordinary words.
+
+The MCP `search_code` tool uses the same syntax.
 
 ---
 
