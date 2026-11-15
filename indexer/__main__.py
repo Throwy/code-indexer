@@ -111,7 +111,7 @@ def index(directory, force, branch, worktree):
               help="Directory whose index to search (default: current dir).")
 @click.option("--mode", type=click.Choice(["fts"]), default="fts",
               help="Search mode.")
-@click.option("--limit", "-n", default=10, help="Max results (default: 10).")
+@click.option("--limit", "-n", default=30, help="Max results (default: 30).")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON.")
 @click.option("--branch", default=None, help="Search the index for a specific branch.")
 @click.option("--repo", default=None, help="Restrict to one repo (when the directory holds several).")

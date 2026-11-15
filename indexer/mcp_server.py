@@ -93,7 +93,7 @@ def _fmt_results(results: list[dict]) -> str:
 def search_code(
     query: str,
     directory: str,
-    limit: int = 10,
+    limit: int = 30,
     repo: Optional[str] = None,
     branch: Optional[str] = None,
 ) -> str:
@@ -107,7 +107,7 @@ def search_code(
                    matching (e.g. "User*"). Pass several related terms in one
                    call rather than one call per term.
         directory: Absolute path to the project directory that has been indexed.
-        limit:     Maximum number of results to return (default 10).
+        limit:     Maximum number of results to return (default 30).
         repo:      Optional repo name to restrict results to (see list_repos).
         branch:    Optional git branch whose index to use (omit for the working-tree index).
 
