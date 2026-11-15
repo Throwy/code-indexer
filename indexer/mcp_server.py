@@ -14,7 +14,10 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from mcp.server.fastmcp import FastMCP
+try:  # mcp >= 2.0
+    from mcp.server.mcpserver import MCPServer as FastMCP
+except ImportError:  # mcp 1.x
+    from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP(
     "code-indexer",
