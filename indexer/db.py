@@ -7,6 +7,7 @@ Schema:
 """
 
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -83,6 +84,7 @@ class DB:
         logger.debug("opening database %s", db_path)
         self.conn = sqlite3.connect(str(db_path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
+        self._batch_depth = 0
         self._init_schema()
 
     def _init_schema(self):
@@ -105,6 +107,34 @@ class DB:
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_files_repo ON files(repo)")
         self.conn.commit()
 
+    # ── Transaction batching ─────────────────────────────────────────────────
+
+    def _commit(self):
+        # Inside batch() commits are deferred; one fsync per file/run beats one per row.
+        if not self._batch_depth:
+            self.conn.commit()
+
+    @contextmanager
+    def batch(self):
+        """Group writes into one transaction. Commits on exit; rolls back the
+        uncommitted tail if an exception (incl. Ctrl-C) escapes. Re-entrant."""
+        self._batch_depth += 1
+        try:
+            yield self
+        except BaseException:
+            if self._batch_depth == 1:
+                self.conn.rollback()
+            raise
+        else:
+            if self._batch_depth == 1:
+                self.conn.commit()
+        finally:
+            self._batch_depth -= 1
+
+    def checkpoint(self):
+        """Commit what's pending without leaving batch(); call at file boundaries."""
+        self.conn.commit()
+
     # ── Index metadata ───────────────────────────────────────────────────────
 
     def set_meta(self, key: str, value: str):
@@ -113,7 +143,7 @@ class DB:
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             (key, value),
         )
-        self.conn.commit()
+        self._commit()
 
     def get_meta(self, key: str) -> Optional[str]:
         row = self.conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
@@ -142,12 +172,12 @@ class DB:
             (path, last_modified, sha256, language, repo),
         )
         row = cur.fetchone()
-        self.conn.commit()
+        self._commit()
         return row[0]
 
     def update_repo(self, path: str, repo: Optional[str]):
         self.conn.execute("UPDATE files SET repo = ? WHERE path = ?", (repo, path))
-        self.conn.commit()
+        self._commit()
 
     def list_repos(self) -> list[sqlite3.Row]:
         return self.conn.execute(
@@ -158,7 +188,7 @@ class DB:
 
     def delete_symbols_for_file(self, file_id: int):
         self.conn.execute("DELETE FROM symbols WHERE file_id = ?", (file_id,))
-        self.conn.commit()
+        self._commit()
 
     def all_indexed_paths(self) -> list[str]:
         rows = self.conn.execute("SELECT path FROM files").fetchall()
@@ -166,7 +196,7 @@ class DB:
 
     def delete_file(self, path: str):
         self.conn.execute("DELETE FROM files WHERE path = ?", (path,))
-        self.conn.commit()
+        self._commit()
 
     # ── Symbol storage ───────────────────────────────────────────────────────
 
@@ -191,7 +221,7 @@ class DB:
             """,
             (file_id, name, kind, signature, docstring, body, start_line, end_line, bases_json),
         )
-        self.conn.commit()
+        self._commit()
         return cur.lastrowid
 
     def get_symbols_by_ids(self, ids: list[int]) -> list[sqlite3.Row]:

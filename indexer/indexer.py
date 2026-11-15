@@ -20,6 +20,10 @@ from .log import logger
 from .parser import iter_source_files, parse_file, parse_content, language_for_path, EXTENSION_TO_LANGUAGE, IGNORED_DIRS
 
 
+# Commit every N indexed files inside a batch so an interrupted run keeps most of its work.
+_CHECKPOINT_EVERY = 250
+
+
 def _index_store_dir() -> Path:
     if sys.platform == "win32":
         base = Path(os.environ.get("LOCALAPPDATA", Path.home()))
@@ -127,58 +131,61 @@ def index_directory(
     existing_paths = set(db.all_indexed_paths())
     seen_paths: set[str] = set()
 
-    for path in files:
-        stats["files_scanned"] += 1
-        rel = str(path.relative_to(target_dir))
-        repo = _repo_for(path.relative_to(target_dir), repos)
-        seen_paths.add(rel)
+    with db.batch():
+        for path in files:
+            stats["files_scanned"] += 1
+            rel = str(path.relative_to(target_dir))
+            repo = _repo_for(path.relative_to(target_dir), repos)
+            seen_paths.add(rel)
 
-        try:
-            mtime = path.stat().st_mtime
-            sha = _sha256(path)
-            lang = language_for_path(path) or "unknown"
+            try:
+                mtime = path.stat().st_mtime
+                sha = _sha256(path)
+                lang = language_for_path(path) or "unknown"
 
-            existing = db.get_file(rel)
-            if not force and existing and existing["sha256"] == sha:
-                if existing["repo"] != repo:
-                    db.update_repo(rel, repo)  # e.g. index predates repo tagging
-                stats["files_skipped"] += 1
-                logger.info(f"  skip  {rel}")
-                continue
+                existing = db.get_file(rel)
+                if not force and existing and existing["sha256"] == sha:
+                    if existing["repo"] != repo:
+                        db.update_repo(rel, repo)  # e.g. index predates repo tagging
+                    stats["files_skipped"] += 1
+                    logger.info(f"  skip  {rel}")
+                    continue
 
-            # Upsert file record and clear old symbols
-            file_id = db.upsert_file(rel, mtime, sha, lang, repo)
-            db.delete_symbols_for_file(file_id)
+                # Upsert file record and clear old symbols
+                file_id = db.upsert_file(rel, mtime, sha, lang, repo)
+                db.delete_symbols_for_file(file_id)
 
-            # Parse and insert symbols
-            symbols = parse_file(path)
-            for sym in symbols:
-                db.insert_symbol(
-                    file_id=file_id,
-                    name=sym.name,
-                    kind=sym.kind,
-                    signature=sym.signature,
-                    docstring=sym.docstring,
-                    body=sym.body,
-                    start_line=sym.start_line,
-                    end_line=sym.end_line,
-                    base_classes=sym.base_classes or None,
-                )
-            stats["files_indexed"] += 1
-            stats["symbols_added"] += len(symbols)
+                # Parse and insert symbols
+                symbols = parse_file(path)
+                for sym in symbols:
+                    db.insert_symbol(
+                        file_id=file_id,
+                        name=sym.name,
+                        kind=sym.kind,
+                        signature=sym.signature,
+                        docstring=sym.docstring,
+                        body=sym.body,
+                        start_line=sym.start_line,
+                        end_line=sym.end_line,
+                        base_classes=sym.base_classes or None,
+                    )
+                stats["files_indexed"] += 1
+                stats["symbols_added"] += len(symbols)
+                if stats["files_indexed"] % _CHECKPOINT_EVERY == 0:
+                    db.checkpoint()
 
-            logger.info(f"  index {rel}  ({len(symbols)} symbols)")
+                logger.info(f"  index {rel}  ({len(symbols)} symbols)")
 
-        except Exception as e:
-            stats["errors"] += 1
-            logger.info(f"  error {rel}: {e}")
-            logger.debug("traceback for %s", rel, exc_info=True)
+            except Exception as e:
+                stats["errors"] += 1
+                logger.info(f"  error {rel}: {e}")
+                logger.debug("traceback for %s", rel, exc_info=True)
 
-    # Remove stale file records (deleted files)
-    stale = existing_paths - seen_paths
-    for path_str in stale:
-        db.delete_file(path_str)
-        logger.info(f"  removed stale: {path_str}")
+        # Remove stale file records (deleted files)
+        stale = existing_paths - seen_paths
+        for path_str in stale:
+            db.delete_file(path_str)
+            logger.info(f"  removed stale: {path_str}")
 
     logger.debug("indexing finished in %.2fs: %s", time.perf_counter() - t0, stats)
     db.close()
@@ -187,6 +194,47 @@ def index_directory(
 
 def _git(repo_dir: Path, *args: str, text: bool = True) -> subprocess.CompletedProcess:
     return subprocess.run(["git", *args], cwd=repo_dir, capture_output=True, text=text)
+
+
+class _BlobReader:
+    """Reads git blobs by SHA through one long-lived `git cat-file --batch` process,
+    instead of spawning `git show` per file (process startup dominated branch indexing)."""
+
+    def __init__(self, repo_dir: Path):
+        self._proc = subprocess.Popen(
+            ["git", "cat-file", "--batch"], cwd=repo_dir,
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        )
+
+    def read(self, blob_sha: str) -> Optional[bytes]:
+        """Blob content, or None if git doesn't have it. Raises OSError if git died."""
+        self._proc.stdin.write(blob_sha.encode() + b"\n")
+        self._proc.stdin.flush()
+        header = self._proc.stdout.readline().split()  # b"<sha> <type> <size>" | b"<sha> missing"
+        if not header:
+            raise OSError("git cat-file exited unexpectedly")
+        if len(header) < 3 or header[1] != b"blob":
+            return None
+        size = int(header[2])
+        data = self._proc.stdout.read(size)
+        self._proc.stdout.read(1)  # trailing LF after the content
+        if len(data) != size:
+            raise OSError("git cat-file returned truncated blob")
+        return data
+
+    def close(self):
+        try:
+            self._proc.stdin.close()
+        except OSError:
+            pass
+        self._proc.stdout.close()
+        self._proc.wait()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
 
 
 def _ref_exists(repo_dir: Path, ref: str) -> bool:
@@ -225,66 +273,69 @@ def _index_repo_ref(db: DB, repo_dir: Path, ref: str, prefix: str, repo: Optiona
         raise RuntimeError(f"git ls-tree failed in {repo_dir}: {ls.stderr.strip()}")
     logger.debug("git ls-tree listed %d entries on %s in %s", len(ls.stdout.splitlines()), ref, repo_dir)
 
-    for line in ls.stdout.splitlines():
-        # Format: "<mode> blob <sha>\t<path>"
-        meta, in_repo_path = line.split("\t", 1)
-        _, kind, blob_sha = meta.split()
-        if kind != "blob":
-            continue  # submodule commits, etc.
+    with _BlobReader(repo_dir) as blobs:
+        for line in ls.stdout.splitlines():
+            # Format: "<mode> blob <sha>\t<path>"
+            meta, in_repo_path = line.split("\t", 1)
+            _, kind, blob_sha = meta.split()
+            if kind != "blob":
+                continue  # submodule commits, etc.
 
-        path = Path(in_repo_path)
-        if path.suffix.lower() not in EXTENSION_TO_LANGUAGE:
-            continue
-        if any(part in IGNORED_DIRS for part in path.parts):
-            continue
-        lang = language_for_path(path)
-        if not lang:
-            continue
-
-        rel_path = prefix + in_repo_path
-        stats["files_scanned"] += 1
-        seen_paths.add(rel_path)
-
-        try:
-            existing = db.get_file(rel_path)
-            if not force and existing and existing["sha256"] == blob_sha:
-                if existing["repo"] != repo:
-                    db.update_repo(rel_path, repo)
-                stats["files_skipped"] += 1
-                logger.info(f"  skip  {rel_path}")
+            path = Path(in_repo_path)
+            if path.suffix.lower() not in EXTENSION_TO_LANGUAGE:
+                continue
+            if any(part in IGNORED_DIRS for part in path.parts):
+                continue
+            lang = language_for_path(path)
+            if not lang:
                 continue
 
-            # Read file content from git without touching the working tree
-            cat = _git(repo_dir, "show", f"{ref}:{in_repo_path}", text=False)
-            if cat.returncode != 0:
+            rel_path = prefix + in_repo_path
+            stats["files_scanned"] += 1
+            seen_paths.add(rel_path)
+
+            try:
+                existing = db.get_file(rel_path)
+                if not force and existing and existing["sha256"] == blob_sha:
+                    if existing["repo"] != repo:
+                        db.update_repo(rel_path, repo)
+                    stats["files_skipped"] += 1
+                    logger.info(f"  skip  {rel_path}")
+                    continue
+
+                # Read file content from git without touching the working tree
+                content = blobs.read(blob_sha)
+                if content is None:
+                    stats["errors"] += 1
+                    logger.info(f"  error {rel_path}: blob {blob_sha} not found")
+                    continue
+
+                file_id = db.upsert_file(rel_path, 0.0, blob_sha, lang, repo)
+                db.delete_symbols_for_file(file_id)
+
+                symbols = parse_content(content, lang)
+                for sym in symbols:
+                    db.insert_symbol(
+                        file_id=file_id,
+                        name=sym.name,
+                        kind=sym.kind,
+                        signature=sym.signature,
+                        docstring=sym.docstring,
+                        body=sym.body,
+                        start_line=sym.start_line,
+                        end_line=sym.end_line,
+                        base_classes=sym.base_classes or None,
+                    )
+                stats["files_indexed"] += 1
+                stats["symbols_added"] += len(symbols)
+                if stats["files_indexed"] % _CHECKPOINT_EVERY == 0:
+                    db.checkpoint()
+                logger.info(f"  index {rel_path}  ({len(symbols)} symbols)")
+
+            except Exception as e:
                 stats["errors"] += 1
-                logger.info(f"  error {rel_path}: git show failed")
-                continue
-
-            file_id = db.upsert_file(rel_path, 0.0, blob_sha, lang, repo)
-            db.delete_symbols_for_file(file_id)
-
-            symbols = parse_content(cat.stdout, lang)
-            for sym in symbols:
-                db.insert_symbol(
-                    file_id=file_id,
-                    name=sym.name,
-                    kind=sym.kind,
-                    signature=sym.signature,
-                    docstring=sym.docstring,
-                    body=sym.body,
-                    start_line=sym.start_line,
-                    end_line=sym.end_line,
-                    base_classes=sym.base_classes or None,
-                )
-            stats["files_indexed"] += 1
-            stats["symbols_added"] += len(symbols)
-            logger.info(f"  index {rel_path}  ({len(symbols)} symbols)")
-
-        except Exception as e:
-            stats["errors"] += 1
-            logger.info(f"  error {rel_path}: {e}")
-            logger.debug("traceback for %s", rel_path, exc_info=True)
+                logger.info(f"  error {rel_path}: {e}")
+                logger.debug("traceback for %s", rel_path, exc_info=True)
 
 
 def index_branch(
@@ -349,15 +400,16 @@ def index_branch(
     existing_paths = set(db.all_indexed_paths())
     seen_paths: set[str] = set()
 
-    for name, repo_dir, ref in plan:
-        logger.info(f"repo {name or repo_dir.name}: {ref}")
-        prefix = f"{name}/" if name else ""
-        _index_repo_ref(db, repo_dir, ref, prefix, name, force, stats, seen_paths)
+    with db.batch():
+        for name, repo_dir, ref in plan:
+            logger.info(f"repo {name or repo_dir.name}: {ref}")
+            prefix = f"{name}/" if name else ""
+            _index_repo_ref(db, repo_dir, ref, prefix, name, force, stats, seen_paths)
 
-    # Remove stale records (files deleted from the branch, or repos that went away)
-    for path_str in existing_paths - seen_paths:
-        db.delete_file(path_str)
-        logger.info(f"  removed stale: {path_str}")
+        # Remove stale records (files deleted from the branch, or repos that went away)
+        for path_str in existing_paths - seen_paths:
+            db.delete_file(path_str)
+            logger.info(f"  removed stale: {path_str}")
 
     logger.debug("indexing finished in %.2fs: %s", time.perf_counter() - t0, stats)
     db.close()
