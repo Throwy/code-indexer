@@ -43,7 +43,7 @@ def cli(verbose, quiet):
 @cli.command()
 @click.argument("directory", default=".", type=click.Path(exists=True, file_okay=False))
 @click.option("--force", is_flag=True, help="Re-index all files even if unchanged.")
-@click.option("--branch", default=None, help="Index a specific git branch instead of the working tree.")
+@click.option("--branch", default=None, help="Index a git branch (committed files) instead of the working tree. In a parent dir of repos, every repo is indexed on this branch; repos lacking it fall back to their default branch.")
 @verbosity_options
 def index(directory, force, branch):
     """Index source files in DIRECTORY (default: current dir)."""
@@ -71,6 +71,10 @@ def index(directory, force, branch):
         click.echo(f"  Symbols added:  {stats['symbols_added']}")
         if stats.get("repos"):
             click.echo(f"  Repos found:    {stats['repos']}")
+        for name, ref in stats.get("fallbacks", {}).items():
+            click.echo(f"  note: {name} has no branch '{branch}'; indexed {ref} instead")
+        for name in stats.get("skipped_repos", []):
+            click.echo(f"  note: {name} has no commits; skipped")
     if stats["errors"]:
         click.echo(f"  Errors:         {stats['errors']}", err=True)
 
@@ -278,15 +282,16 @@ def status(directory, branch):
 @click.option("--dir", "directory", default=".", type=click.Path(exists=True, file_okay=False),
               help="Parent directory whose index to inspect (default: current dir).")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON.")
+@click.option("--branch", default=None, help="Inspect the index for a specific branch.")
 @verbosity_options
-def repos_cmd(directory, as_json):
+def repos_cmd(directory, as_json, branch):
     """List the git repos recorded in the index for DIRECTORY."""
     target = Path(directory).resolve()
-    if not db_path_for(target).exists():
-        click.echo(f"No index found for {target}.")
+    if not db_path_for(target, branch=branch).exists():
+        click.echo(f"No index found for {target}{' branch ' + branch if branch else ''}.")
         return
     from .searcher import list_repos
-    rows = list_repos(target)
+    rows = list_repos(target, branch=branch)
     if as_json:
         click.echo(json.dumps(rows, indent=2))
         return

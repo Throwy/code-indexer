@@ -147,8 +147,21 @@ code-indexer refs parse_jwt --dir ~/dev --repo api
   just get their repo tag filled in on the next `index` run.
 - Each repo's `.gitignore` (plus `.git/info/exclude` and your global excludes
   file) is respected, along with the built-in ignore list.
-- Limitation: `--branch` works on a single repo directory, not on a parent
-  folder of repos.
+- `--branch` works on a parent folder too: every repo is indexed on that branch
+  (committed files; working trees are untouched), and `index` / `search` / `repos`
+  etc. take the same `--branch` to query it. A repo that lacks the branch falls
+  back to its default branch (origin's HEAD, else `main`/`master`) and the
+  summary lists which repos fell back. A branch that exists in no repo is an
+  error.
+- `--branch main` also matches `master`: a repo that only has `master` is
+  indexed from it (this applies to single repos too, and isn't reported as a
+  fallback). The reverse (`--branch master` matching `main`) does not apply.
+- A branch that exists only as `origin/<branch>` is used if there is no local one.
+
+```bash
+code-indexer index ~/dev --branch feature/auth
+code-indexer search "UserService" --dir ~/dev --branch feature/auth
+```
 
 ---
 
@@ -195,11 +208,14 @@ Restart Claude Desktop after editing. You should see "code-indexer" in the MCP t
 | `goto_symbol` | Find the definition(s) of a symbol by exact name (optional `repo` filter) |
 | `find_implementations` | Find all types that implement or extend a base class/interface (optional `repo` filter) |
 | `find_usages` | Find symbols whose body references a given name (approximate; optional `repo` filter) |
-| `run_index` | Trigger indexing of a directory from within Claude |
+| `run_index` | Trigger indexing of a directory from within Claude (optional `branch`) |
 | `list_repos` | List the git repos found under an indexed parent directory |
 | `list_indexes` | List every stored index with its directory, branch, size and staleness |
 | `clean_index` | Delete the index for a directory (or one branch / all branches) |
 | `clean_stale_indexes` | Remove indexes whose directory or branch is gone (dry run by default) |
+
+Every search/navigation tool, `index_status`, `get_file_symbols` and `list_repos`
+also accept an optional `branch` to query that branch's index.
 
 ### Example Claude prompts once connected:
 

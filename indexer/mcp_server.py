@@ -63,6 +63,7 @@ def search_code(
     directory: str,
     limit: int = 10,
     repo: Optional[str] = None,
+    branch: Optional[str] = None,
 ) -> str:
     """
     Search an indexed codebase for symbols matching the query.
@@ -76,44 +77,48 @@ def search_code(
         directory: Absolute path to the project directory that has been indexed.
         limit:     Maximum number of results to return (default 10).
         repo:      Optional repo name to restrict results to (see list_repos).
+        branch:    Optional git branch whose index to use (omit for the working-tree index).
 
     Returns:
         Formatted list of matching symbols with file paths and line numbers.
     """
     from .searcher import fts_search
     target = _resolve(directory)
-    results = fts_search(target, query, limit=limit, repo=repo)
+    results = fts_search(target, query, limit=limit, repo=repo, branch=branch)
     return _fmt_results(results)
 
 
 @mcp.tool()
-def index_status(directory: str) -> str:
+def index_status(directory: str, branch: Optional[str] = None) -> str:
     """
     Return statistics about the code index for a project directory.
     Use this to confirm an index exists before searching.
 
     Args:
         directory: Absolute path to the project directory.
+        branch:    Optional git branch whose index to use (omit for the working-tree index).
 
     Returns:
         Number of indexed files, symbols, embeddings, and language breakdown.
     """
     from .indexer import get_db, db_path_for
     target = _resolve(directory)
-    db_path = db_path_for(target)
+    db_path = db_path_for(target, branch)
 
     if not db_path.exists():
+        flag = f" --branch {branch}" if branch else ""
         return (
-            f"No index found for {target}. "
-            f"Run `python -m indexer index {directory}` to create one."
+            f"No index found for {target}{' branch ' + branch if branch else ''}. "
+            f"Run run_index, or `code-indexer index{flag} {directory}`, to create one."
         )
 
-    db = get_db(target)
+    db = get_db(target, branch)
     s = db.stats()
     db.close()
 
     lines = [
         f"Index: {db_path}",
+        *([f"Branch:   {branch}"] if branch else []),
         f"Files:    {s['files']}",
         f"Symbols:  {s['symbols']}",
     ]
@@ -127,25 +132,26 @@ def index_status(directory: str) -> str:
 
 
 @mcp.tool()
-def get_file_symbols(file_path: str, directory: str) -> str:
+def get_file_symbols(file_path: str, directory: str, branch: Optional[str] = None) -> str:
     """
     List all indexed symbols (functions, classes, methods) in a specific file.
 
     Args:
         file_path: Path to the file, relative to the project directory.
         directory: Absolute path to the project directory.
+        branch:    Optional git branch whose index to use (omit for the working-tree index).
 
     Returns:
         All symbols found in that file with their line ranges and signatures.
     """
     from .indexer import get_db, db_path_for
     target = _resolve(directory)
-    db_path = db_path_for(target)
+    db_path = db_path_for(target, branch)
 
     if not db_path.exists():
-        return f"No index found. Run `python -m indexer index {directory}` first."
+        return f"No index found{' for branch ' + branch if branch else ''}. Run run_index first."
 
-    db = get_db(target)
+    db = get_db(target, branch)
     rows = db.conn.execute(
         """
         SELECT s.*, f.path FROM symbols s
@@ -175,6 +181,7 @@ def goto_symbol(
     directory: str,
     kind: Optional[str] = None,
     repo: Optional[str] = None,
+    branch: Optional[str] = None,
 ) -> str:
     """
     Find the definition(s) of a symbol by exact name.
@@ -184,13 +191,14 @@ def goto_symbol(
         directory: Absolute path to the project directory that has been indexed.
         kind:      Optional filter: "function", "class", "method", "interface", or "struct".
         repo:      Optional repo name to restrict results to (see list_repos).
+        branch:    Optional git branch whose index to use (omit for the working-tree index).
 
     Returns:
         File path(s) and line numbers where the symbol is defined.
     """
     from .searcher import goto_symbol as _goto
     target = _resolve(directory)
-    results = _goto(target, name, kind=kind, repo=repo)
+    results = _goto(target, name, kind=kind, repo=repo, branch=branch)
     if not results:
         return f"No definition found for '{name}'."
     lines = [f"{len(results)} definition(s) for '{name}':\n"]
@@ -209,6 +217,7 @@ def find_implementations(
     name: str,
     directory: str,
     repo: Optional[str] = None,
+    branch: Optional[str] = None,
 ) -> str:
     """
     Find all classes or structs that implement or extend a given interface or base class.
@@ -217,13 +226,14 @@ def find_implementations(
         name:      Name of the interface or base class, e.g. "IRepository" or "BaseHandler".
         directory: Absolute path to the project directory that has been indexed.
         repo:      Optional repo name to restrict results to (see list_repos).
+        branch:    Optional git branch whose index to use (omit for the working-tree index).
 
     Returns:
         List of implementing types with their file paths and line numbers.
     """
     from .searcher import find_implementations as _impls
     target = _resolve(directory)
-    results = _impls(target, name, repo=repo)
+    results = _impls(target, name, repo=repo, branch=branch)
     if not results:
         return f"No implementations found for '{name}'."
     lines = [f"{len(results)} implementation(s) of '{name}':\n"]
@@ -244,6 +254,7 @@ def find_usages(
     directory: str,
     limit: int = 20,
     repo: Optional[str] = None,
+    branch: Optional[str] = None,
 ) -> str:
     """
     Find symbols (functions, methods) whose body references or calls NAME.
@@ -254,13 +265,14 @@ def find_usages(
         directory: Absolute path to the project directory that has been indexed.
         limit:     Maximum number of results (default 20).
         repo:      Optional repo name to restrict results to (see list_repos).
+        branch:    Optional git branch whose index to use (omit for the working-tree index).
 
     Returns:
         List of symbols that appear to reference NAME, with file paths and line numbers.
     """
     from .searcher import find_usages as _refs
     target = _resolve(directory)
-    results = _refs(target, name, limit=limit, repo=repo)
+    results = _refs(target, name, limit=limit, repo=repo, branch=branch)
     if not results:
         return f"No references found for '{name}'."
     lines = [f"{len(results)} reference(s) to '{name}':\n"]
@@ -278,27 +290,37 @@ def find_usages(
 def run_index(
     directory: str,
     force: bool = False,
+    branch: Optional[str] = None,
 ) -> str:
     """
     Index (or re-index) a project directory. Only changed files are re-processed.
+    The directory may be a single git repo or a parent folder holding several repos
+    (they are all indexed together, each file tagged with its repo).
 
     Args:
         directory: Absolute path to the project directory to index.
         force:     If True, re-index all files even if unchanged.
+        branch:    Optional git branch to index (committed files, working tree untouched).
+                   Applies to every repo under a parent folder; a repo without that
+                   branch falls back to its default branch. Omit to index the working tree.
+                   Pass the same branch to the search tools to query this index.
 
     Returns:
         Summary of files scanned, indexed, and symbols added.
     """
-    from .indexer import index_directory
+    from .indexer import index_directory, index_branch
     target = _resolve(directory)
 
-    stats = index_directory(
-        target_dir=target,
-        force=force,
-    )
+    if branch:
+        try:
+            stats = index_branch(target_dir=target, branch=branch, force=force)
+        except ValueError as e:
+            return str(e)
+    else:
+        stats = index_directory(target_dir=target, force=force)
 
     lines = [
-        f"Indexing complete for {target}",
+        f"Indexing complete for {target}" + (f" (branch {branch})" if branch else ""),
         f"Files scanned:  {stats['files_scanned']}",
         f"Files indexed:  {stats['files_indexed']}",
         f"Files skipped:  {stats['files_skipped']} (unchanged)",
@@ -306,19 +328,24 @@ def run_index(
     ]
     if stats.get("repos"):
         lines.insert(1, f"Repos found:    {stats['repos']}")
+    for name, ref in stats.get("fallbacks", {}).items():
+        lines.append(f"Note: {name} has no branch '{branch}'; indexed {ref} instead")
+    for name in stats.get("skipped_repos", []):
+        lines.append(f"Note: {name} has no commits; skipped")
     if stats.get("errors"):
         lines.append(f"Errors:         {stats['errors']}")
     return "\n".join(lines)
 
 
 @mcp.tool()
-def list_repos(directory: str) -> str:
+def list_repos(directory: str, branch: Optional[str] = None) -> str:
     """
     List the git repos found under an indexed directory that contains several repos.
     Use the returned names as the `repo` filter in the other tools.
 
     Args:
         directory: Absolute path to the parent directory that has been indexed.
+        branch:    Optional git branch whose index to use (omit for the working-tree index).
 
     Returns:
         Repo names with indexed file and symbol counts.
@@ -326,9 +353,9 @@ def list_repos(directory: str) -> str:
     from .indexer import db_path_for
     from .searcher import list_repos as _repos
     target = _resolve(directory)
-    if not db_path_for(target).exists():
-        return f"No index found for {target}. Run run_index first."
-    repos = _repos(target)
+    if not db_path_for(target, branch).exists():
+        return f"No index found for {target}{' branch ' + branch if branch else ''}. Run run_index first."
+    repos = _repos(target, branch=branch)
     if not repos:
         return "No repos recorded. Either this directory is itself a single repo, or it needs re-indexing."
     lines = [f"{len(repos)} repo(s) under {target}:\n"]
