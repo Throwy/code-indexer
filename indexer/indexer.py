@@ -364,6 +364,20 @@ def index_branch(
     return stats
 
 
+def index_default(target_dir: Path, force: bool = False) -> tuple[dict, Optional[str]]:
+    """
+    Index `target_dir` the default way: the main branch (else master) of its git
+    repo(s), leaving the working tree untouched. A directory with no git repos at
+    all is indexed as a plain working tree. Returns (stats, branch used or None).
+    """
+    if not (target_dir / ".git").exists() and not find_repos(target_dir):
+        return index_directory(target_dir=target_dir, force=force), None
+    try:
+        return index_branch(target_dir=target_dir, branch="main", force=force), "main"
+    except ValueError as e:
+        raise ValueError(f"{str(e).rstrip('.')}. Pass --branch <name> to pick a branch, or --worktree to index the working tree.") from e
+
+
 # ── Index management (list / clean) ──────────────────────────────────────────
 
 def _read_index_info(db_file: Path) -> dict:
@@ -463,13 +477,17 @@ def resolve_index(directory: Path, branch: Optional[str] = None,
 
     An explicit branch is used as given. With no branch the working-tree index is
     used if it exists; otherwise, if the directory has exactly one branch index,
-    that one is used (and `note` says so). `error` is set when nothing usable exists.
+    that one is used, and with several, main (then master) is the default
+    (`note` says which). `error` is set when nothing usable exists.
     """
     if not branch and not db_path_for(directory).exists():
         branches = branch_indexes_for(directory)
         if len(branches) == 1:
             branch = branches[0]
             return branch, f"No working-tree index; using the only indexed branch '{branch}'.", None
+        for default in ("main", "master"):
+            if default in branches:
+                return default, f"No working-tree index; using default branch '{default}'.", None
     if not db_path_for(directory, branch).exists():
         return branch, None, no_index_message(directory, branch, shown_dir)
     return branch, None, None

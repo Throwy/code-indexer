@@ -16,7 +16,7 @@ from pathlib import Path
 import click
 
 from . import log as _log
-from .indexer import index_directory, index_branch, get_db, db_path_for, resolve_index
+from .indexer import index_directory, index_branch, index_default, get_db, db_path_for, resolve_index
 
 
 def verbosity_options(f):
@@ -55,13 +55,28 @@ def cli(verbose, quiet):
 @click.argument("directory", default=".", type=click.Path(exists=True, file_okay=False))
 @click.option("--force", is_flag=True, help="Re-index all files even if unchanged.")
 @click.option("--branch", default=None, help="Index a git branch (committed files) instead of the working tree. In a parent dir of repos, every repo is indexed on this branch; repos lacking it fall back to their default branch.")
+@click.option("--worktree", is_flag=True, help="Index the working tree (uncommitted changes included) instead of the default branch.")
 @verbosity_options
-def index(directory, force, branch):
-    """Index source files in DIRECTORY (default: current dir)."""
+def index(directory, force, branch, worktree):
+    """Index source files in DIRECTORY (default: current dir).
+
+    Without --branch or --worktree, indexes the main branch (else master).
+    """
     target = Path(directory).resolve()
+    if branch and worktree:
+        click.echo("Use either --branch or --worktree, not both.", err=True)
+        sys.exit(1)
 
     quiet = _log.get_level() < 0
-    if branch:
+    if not branch and not worktree:
+        if not quiet:
+            click.echo(f"Indexing {target} (default branch) ...")
+        try:
+            stats, branch = index_default(target, force=force)
+        except ValueError as e:
+            click.echo(str(e), err=True)
+            sys.exit(1)
+    elif branch:
         if not quiet:
             click.echo(f"Indexing branch '{branch}' in {target} ...")
         try:

@@ -40,12 +40,26 @@ This creates a `.code-index.db` file inside the target directory.
 Options:
 - `--force`           Re-index all files even if unchanged
 - `-v`                Per-file progress (`-vv` for debug; see [Verbosity](#11-verbosity-and-logging))
-- `--branch <name>`   Index a specific git branch instead of the working tree
+- `--branch <name>`   Index a specific git branch instead of the default (`main`, else `master`)
+- `--worktree`        Index the working tree (uncommitted changes included) instead of a branch
+
+With neither flag, a git repo (or parent folder of repos) is indexed on `main`
+(else `master`); a folder with no git repos is indexed as a plain working tree.
 
 ```bash
+# Default: index main (else master)
+code-indexer index /path/to/myproject
+
 # Index a specific branch
 code-indexer index /path/to/myproject --branch feature/auth
+
+# Index the working tree, uncommitted changes included
+code-indexer index /path/to/myproject --worktree
 ```
+
+Searching needs no flag for the default: with no `--branch`, queries use the
+working-tree index if you made one, otherwise `main`/`master` (see
+[Querying without `--branch`](#querying-without---branch)).
 
 ---
 
@@ -147,6 +161,8 @@ code-indexer refs parse_jwt --dir ~/dev --repo api
   just get their repo tag filled in on the next `index` run.
 - Each repo's `.gitignore` (plus `.git/info/exclude` and your global excludes
   file) is respected, along with the built-in ignore list.
+- Indexing a parent folder with no flags indexes every repo on its own `main`
+  (else `master`); `--worktree` indexes the working trees instead.
 - `--branch` works on a parent folder too: every repo is indexed on that branch
   (committed files; working trees are untouched), and `index` / `search` / `repos`
   etc. take the same `--branch` to query it. A repo that lacks the branch falls
@@ -157,11 +173,13 @@ code-indexer refs parse_jwt --dir ~/dev --repo api
   indexed from it (this applies to single repos too, and isn't reported as a
   fallback). The reverse (`--branch master` matching `main`) does not apply.
 - A branch that exists only as `origin/<branch>` is used if there is no local one.
-- **Querying without `--branch`:** the working-tree index is used if there is
-  one. If there isn't, but the directory has exactly one branch index, that
+<a id="querying-without---branch"></a>
+- **Querying without `--branch`:** the working-tree index (from `--worktree`)
+  is used if there is one. If there isn't, but the directory has exactly one branch index, that
   branch is used automatically (the CLI prints a note to stderr; MCP tools
-  prefix their answer with it). If there are several branch indexes, the
-  command lists them and asks you to pass `--branch`. The same applies to the
+  prefix their answer with it). If there are several branch indexes, `main`
+  is used (else `master`); if neither is indexed, the command lists them and
+  asks you to pass `--branch`. The same applies to the
   MCP tools' `branch` parameter.
 
 ```bash
@@ -214,7 +232,7 @@ Restart Claude Desktop after editing. You should see "code-indexer" in the MCP t
 | `goto_symbol` | Find the definition(s) of a symbol by exact name (optional `repo` filter) |
 | `find_implementations` | Find all types that implement or extend a base class/interface (optional `repo` filter) |
 | `find_usages` | Find symbols whose body references a given name (approximate; optional `repo` filter) |
-| `run_index` | Trigger indexing of a directory from within Claude (optional `branch`) |
+| `run_index` | Trigger indexing of a directory from within Claude (optional `branch`, or `worktree` to index the working tree; defaults to main/master) |
 | `list_repos` | List the git repos found under an indexed parent directory |
 | `list_indexes` | List every stored index with its directory, branch, size and staleness |
 | `clean_index` | Delete the index for a directory (or one branch / all branches) |

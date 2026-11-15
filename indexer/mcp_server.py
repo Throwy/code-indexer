@@ -27,8 +27,8 @@ mcp = FastMCP(
         "Use these tools to search and explore an indexed codebase. "
         "Always call index_status first to confirm an index exists before searching. "
         "Indexes are per directory and per branch: an index built with a branch is only "
-        "found when the same branch is passed (omit branch for the working-tree index). "
-        "If a directory has no working-tree index but exactly one branch index, that branch is used automatically; if it has several, pass one as "
+        "found when the same branch is passed (omit branch for the working-tree index, or for main/master when only branch indexes exist). "
+        "If a directory has no working-tree index but exactly one branch index, that branch is used automatically; if it has several, main (else master) is the default, otherwise pass one as "
         "`branch`. A directory holding several git repos is indexed as one; use list_repos "
         "and the `repo` filter."
     ),
@@ -320,6 +320,7 @@ def run_index(
     directory: str,
     force: bool = False,
     branch: Optional[str] = None,
+    worktree: bool = False,
 ) -> str:
     """
     Index (or re-index) a project directory. Only changed files are re-processed.
@@ -331,16 +332,25 @@ def run_index(
         force:     If True, re-index all files even if unchanged.
         branch:    Optional git branch to index (committed files, working tree untouched).
                    Applies to every repo under a parent folder; a repo without that
-                   branch falls back to its default branch. Omit to index the working tree.
+                   branch falls back to its default branch. Omit to index main (else master).
                    Pass the same branch to the search tools to query this index.
+        worktree:  If True, index the working tree (uncommitted changes included)
+                   instead of a branch. Cannot be combined with `branch`.
 
     Returns:
         Summary of files scanned, indexed, and symbols added.
     """
-    from .indexer import index_directory, index_branch
+    from .indexer import index_directory, index_branch, index_default
     target = _resolve(directory)
 
-    if branch:
+    if branch and worktree:
+        return "Use either branch or worktree, not both."
+    if not branch and not worktree:
+        try:
+            stats, branch = index_default(target, force=force)
+        except ValueError as e:
+            return str(e)
+    elif branch:
         try:
             stats = index_branch(target_dir=target, branch=branch, force=force)
         except ValueError as e:
