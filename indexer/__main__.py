@@ -16,7 +16,7 @@ from pathlib import Path
 import click
 
 from . import log as _log
-from .indexer import index_directory, index_branch, get_db, db_path_for
+from .indexer import index_directory, index_branch, get_db, db_path_for, resolve_index
 
 
 def verbosity_options(f):
@@ -29,6 +29,17 @@ def verbosity_options(f):
         _log.configure(verbose, quiet)
         return f(*args, **kwargs)
     return wrapper
+
+
+def _use_index(target: Path, branch, directory, soft: bool = False):
+    """Pick the index to query (see resolve_index); explain and exit if there is none."""
+    branch, note, error = resolve_index(target, branch, directory)
+    if note and _log.get_level() >= 0:
+        click.echo(note, err=True)
+    if error:
+        click.echo(error, err=not soft)
+        sys.exit(0 if soft else 1)
+    return branch
 
 
 @click.group()
@@ -93,12 +104,7 @@ def index(directory, force, branch):
 def search(query, directory, mode, limit, as_json, branch, repo):
     """Search the index for QUERY."""
     target = Path(directory).resolve()
-    db_path = db_path_for(target, branch=branch)
-
-    if not db_path.exists():
-        hint = f" --branch {branch}" if branch else ""
-        click.echo(f"No index found for {target}{' branch ' + branch if branch else ''}. Run `python -m indexer index{hint} {directory}` first.", err=True)
-        sys.exit(1)
+    branch = _use_index(target, branch, directory)
 
     from .searcher import fts_search
 
@@ -139,11 +145,7 @@ def search(query, directory, mode, limit, as_json, branch, repo):
 def goto(name, kind, directory, as_json, branch, repo):
     """Jump to the definition(s) of symbol NAME."""
     target = Path(directory).resolve()
-    db_path = db_path_for(target, branch=branch)
-    if not db_path.exists():
-        hint = f" --branch {branch}" if branch else ""
-        click.echo(f"No index found for {target}{' branch ' + branch if branch else ''}. Run `python -m indexer index{hint} {directory}` first.", err=True)
-        sys.exit(1)
+    branch = _use_index(target, branch, directory)
 
     from .searcher import goto_symbol
     results = goto_symbol(target, name, kind=kind, branch=branch, repo=repo)
@@ -177,11 +179,7 @@ def goto(name, kind, directory, as_json, branch, repo):
 def impls(name, directory, as_json, branch, repo):
     """Find all types that implement or extend NAME."""
     target = Path(directory).resolve()
-    db_path = db_path_for(target, branch=branch)
-    if not db_path.exists():
-        hint = f" --branch {branch}" if branch else ""
-        click.echo(f"No index found for {target}{' branch ' + branch if branch else ''}. Run `python -m indexer index{hint} {directory}` first.", err=True)
-        sys.exit(1)
+    branch = _use_index(target, branch, directory)
 
     from .searcher import find_implementations
     results = find_implementations(target, name, branch=branch, repo=repo)
@@ -217,11 +215,7 @@ def impls(name, directory, as_json, branch, repo):
 def refs(name, directory, limit, as_json, branch, repo):
     """Find symbols that reference or call NAME (approximate body search)."""
     target = Path(directory).resolve()
-    db_path = db_path_for(target, branch=branch)
-    if not db_path.exists():
-        hint = f" --branch {branch}" if branch else ""
-        click.echo(f"No index found for {target}{' branch ' + branch if branch else ''}. Run `python -m indexer index{hint} {directory}` first.", err=True)
-        sys.exit(1)
+    branch = _use_index(target, branch, directory)
 
     from .searcher import find_usages
     results = find_usages(target, name, limit=limit, branch=branch, repo=repo)
@@ -252,14 +246,8 @@ def refs(name, directory, limit, as_json, branch, repo):
 def status(directory, branch):
     """Show index statistics for DIRECTORY."""
     target = Path(directory).resolve()
+    branch = _use_index(target, branch, directory, soft=True)
     db_path = db_path_for(target, branch=branch)
-
-    if not db_path.exists():
-        msg = f"No index found for {target}"
-        if branch:
-            msg += f" branch '{branch}'"
-        click.echo(msg + ".")
-        return
 
     db = get_db(target, branch=branch)
     s = db.stats()
@@ -287,9 +275,7 @@ def status(directory, branch):
 def repos_cmd(directory, as_json, branch):
     """List the git repos recorded in the index for DIRECTORY."""
     target = Path(directory).resolve()
-    if not db_path_for(target, branch=branch).exists():
-        click.echo(f"No index found for {target}{' branch ' + branch if branch else ''}.")
-        return
+    branch = _use_index(target, branch, directory, soft=True)
     from .searcher import list_repos
     rows = list_repos(target, branch=branch)
     if as_json:

@@ -10,6 +10,8 @@ Register in Claude Desktop config (see SETUP.md).
 """
 
 from __future__ import annotations
+import functools
+import inspect
 import json
 from pathlib import Path
 from typing import Optional
@@ -23,7 +25,12 @@ mcp = FastMCP(
     "code-indexer",
     instructions=(
         "Use these tools to search and explore an indexed codebase. "
-        "Always call index_status first to confirm an index exists before searching."
+        "Always call index_status first to confirm an index exists before searching. "
+        "Indexes are per directory and per branch: an index built with a branch is only "
+        "found when the same branch is passed (omit branch for the working-tree index). "
+        "If a directory has no working-tree index but exactly one branch index, that branch is used automatically; if it has several, pass one as "
+        "`branch`. A directory holding several git repos is indexed as one; use list_repos "
+        "and the `repo` filter."
     ),
 )
 
@@ -35,6 +42,30 @@ def _resolve(directory: str) -> Path:
     if not p.is_dir():
         raise ValueError(f"Directory not found: {directory}")
     return p
+
+
+def _branch_aware(fn):
+    """
+    For tools that query an existing index: pick the index to use (see resolve_index),
+    returning an explanation if there is none, and prefix the answer with a note when
+    the only indexed branch was chosen automatically.
+    """
+    sig = inspect.signature(fn)
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        from .indexer import resolve_index
+        bound = sig.bind(*args, **kwargs)
+        bound.apply_defaults()
+        directory = bound.arguments["directory"]
+        branch, note, error = resolve_index(_resolve(directory), bound.arguments.get("branch"), directory)
+        if error:
+            return error
+        bound.arguments["branch"] = branch
+        out = fn(*bound.args, **bound.kwargs)
+        return f"{note}\n\n{out}" if note else out
+
+    return wrapper
 
 
 def _fmt_results(results: list[dict]) -> str:
@@ -58,6 +89,7 @@ def _fmt_results(results: list[dict]) -> str:
 # ── Tools ─────────────────────────────────────────────────────────────────────
 
 @mcp.tool()
+@_branch_aware
 def search_code(
     query: str,
     directory: str,
@@ -89,6 +121,7 @@ def search_code(
 
 
 @mcp.tool()
+@_branch_aware
 def index_status(directory: str, branch: Optional[str] = None) -> str:
     """
     Return statistics about the code index for a project directory.
@@ -105,12 +138,6 @@ def index_status(directory: str, branch: Optional[str] = None) -> str:
     target = _resolve(directory)
     db_path = db_path_for(target, branch)
 
-    if not db_path.exists():
-        flag = f" --branch {branch}" if branch else ""
-        return (
-            f"No index found for {target}{' branch ' + branch if branch else ''}. "
-            f"Run run_index, or `code-indexer index{flag} {directory}`, to create one."
-        )
 
     db = get_db(target, branch)
     s = db.stats()
@@ -132,6 +159,7 @@ def index_status(directory: str, branch: Optional[str] = None) -> str:
 
 
 @mcp.tool()
+@_branch_aware
 def get_file_symbols(file_path: str, directory: str, branch: Optional[str] = None) -> str:
     """
     List all indexed symbols (functions, classes, methods) in a specific file.
@@ -148,8 +176,6 @@ def get_file_symbols(file_path: str, directory: str, branch: Optional[str] = Non
     target = _resolve(directory)
     db_path = db_path_for(target, branch)
 
-    if not db_path.exists():
-        return f"No index found{' for branch ' + branch if branch else ''}. Run run_index first."
 
     db = get_db(target, branch)
     rows = db.conn.execute(
@@ -176,6 +202,7 @@ def get_file_symbols(file_path: str, directory: str, branch: Optional[str] = Non
 
 
 @mcp.tool()
+@_branch_aware
 def goto_symbol(
     name: str,
     directory: str,
@@ -213,6 +240,7 @@ def goto_symbol(
 
 
 @mcp.tool()
+@_branch_aware
 def find_implementations(
     name: str,
     directory: str,
@@ -249,6 +277,7 @@ def find_implementations(
 
 
 @mcp.tool()
+@_branch_aware
 def find_usages(
     name: str,
     directory: str,
@@ -338,6 +367,7 @@ def run_index(
 
 
 @mcp.tool()
+@_branch_aware
 def list_repos(directory: str, branch: Optional[str] = None) -> str:
     """
     List the git repos found under an indexed directory that contains several repos.
@@ -350,11 +380,8 @@ def list_repos(directory: str, branch: Optional[str] = None) -> str:
     Returns:
         Repo names with indexed file and symbol counts.
     """
-    from .indexer import db_path_for
     from .searcher import list_repos as _repos
     target = _resolve(directory)
-    if not db_path_for(target, branch).exists():
-        return f"No index found for {target}{' branch ' + branch if branch else ''}. Run run_index first."
     repos = _repos(target, branch=branch)
     if not repos:
         return "No repos recorded. Either this directory is itself a single repo, or it needs re-indexing."

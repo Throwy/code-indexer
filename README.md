@@ -157,6 +157,12 @@ code-indexer refs parse_jwt --dir ~/dev --repo api
   indexed from it (this applies to single repos too, and isn't reported as a
   fallback). The reverse (`--branch master` matching `main`) does not apply.
 - A branch that exists only as `origin/<branch>` is used if there is no local one.
+- **Querying without `--branch`:** the working-tree index is used if there is
+  one. If there isn't, but the directory has exactly one branch index, that
+  branch is used automatically (the CLI prints a note to stderr; MCP tools
+  prefix their answer with it). If there are several branch indexes, the
+  command lists them and asks you to pass `--branch`. The same applies to the
+  MCP tools' `branch` parameter.
 
 ```bash
 code-indexer index ~/dev --branch feature/auth

@@ -432,6 +432,49 @@ def list_indexes() -> list[dict]:
     return infos
 
 
+def branch_indexes_for(directory: Path) -> list[str]:
+    """Branch names that have an index for `directory` (the working-tree index is not included)."""
+    key = hashlib.sha256(str(directory).encode()).hexdigest()[:16]
+    return sorted(i["branch"] for i in list_indexes()
+                  if i["name"].startswith(key + "_") and i["branch"])
+
+
+def no_index_message(directory: Path, branch: Optional[str] = None, shown_dir: Optional[str] = None) -> str:
+    """Explain a missing index, pointing at the branch indexes that do exist for the directory."""
+    shown_dir = shown_dir or str(directory)
+    where = f"{directory} branch '{branch}'" if branch else str(directory)
+    msg = f"No index found for {where}."
+    others = [b for b in branch_indexes_for(directory) if b != branch]
+    if others:
+        listed = ", ".join(others)
+        if branch:
+            msg += f" Indexed branches for this directory: {listed}."
+        else:
+            msg += (f" It has no working-tree index, but is indexed for branch(es): {listed}."
+                    f" Pass --branch <name> (MCP: branch) to use one.")
+    flag = f" --branch {branch}" if branch else ""
+    return msg + f" To create it, run `code-indexer index{flag} {shown_dir}`."
+
+
+def resolve_index(directory: Path, branch: Optional[str] = None,
+                  shown_dir: Optional[str] = None) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """
+    Decide which index a query should use. Returns (branch, note, error).
+
+    An explicit branch is used as given. With no branch the working-tree index is
+    used if it exists; otherwise, if the directory has exactly one branch index,
+    that one is used (and `note` says so). `error` is set when nothing usable exists.
+    """
+    if not branch and not db_path_for(directory).exists():
+        branches = branch_indexes_for(directory)
+        if len(branches) == 1:
+            branch = branches[0]
+            return branch, f"No working-tree index; using the only indexed branch '{branch}'.", None
+    if not db_path_for(directory, branch).exists():
+        return branch, None, no_index_message(directory, branch, shown_dir)
+    return branch, None, None
+
+
 def delete_index(db_file: Path) -> tuple[bool, str]:
     """Delete an index file plus its SQLite -wal/-shm companions."""
     try:
