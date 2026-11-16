@@ -241,6 +241,11 @@ def _ref_exists(repo_dir: Path, ref: str) -> bool:
     return _git(repo_dir, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}").returncode == 0
 
 
+def _fetch(repo_dir: Path) -> None:
+    """Fetch from origin, silently ignoring repos with no remote."""
+    _git(repo_dir, "fetch", "--prune", "origin")
+
+
 def resolve_branch(repo_dir: Path, branch: str) -> Optional[str]:
     """The git ref to read for `branch` in this repo: the local branch, else origin/<branch>, else None.
 
@@ -364,6 +369,13 @@ def index_branch(
     single = (target_dir / ".git").exists()
     if not single and not repos:
         raise ValueError(f"{target_dir} is not a git repository and contains none (searched 3 levels deep).")
+
+    # Fetch latest from origin before resolving any refs
+    if single:
+        _fetch(target_dir)
+    else:
+        for repo_dir in repos.values():
+            _fetch(repo_dir)
 
     # Decide which ref to read in each repo before touching the database
     plan: list[tuple[Optional[str], Path, str]] = []   # (repo name, repo dir, ref)
