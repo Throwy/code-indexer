@@ -241,16 +241,18 @@ def _ref_exists(repo_dir: Path, ref: str) -> bool:
     return _git(repo_dir, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}").returncode == 0
 
 
-def _fetch(repo_dir: Path) -> bool:
-    """Fetch from origin. Returns True on success; warns (never raises) if it fails or there is no remote."""
+def _fetch(repo_dir: Path, *refspecs: str, warn: bool = True) -> bool:
+    """Fetch from origin (optionally only `refspecs`). Returns True on success; warns (never raises) on failure."""
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}  # never hang on a credential prompt
     try:
-        r = subprocess.run(["git", "fetch", "--prune", "origin"], cwd=repo_dir, env=env,
+        r = subprocess.run(["git", "fetch", "--prune", "origin", *refspecs], cwd=repo_dir, env=env,
                            capture_output=True, text=True, timeout=120)
     except subprocess.TimeoutExpired:
         logger.warning("git fetch timed out in %s; indexing possibly stale refs", repo_dir)
         return False
     if r.returncode != 0:
+        if not warn:
+            return False
         logger.warning("git fetch failed in %s (indexing possibly stale refs): %s", repo_dir, r.stderr.strip())
         return False
     return True
@@ -283,6 +285,33 @@ def resolve_branch(repo_dir: Path, branch: str) -> Optional[str]:
             return local or remote
         if _ref_exists(repo_dir, name):  # tag, sha, or other ref
             return name
+    return None
+
+
+def _find_ref_ignoring_case(repo_dir: Path, branch: str) -> Optional[str]:
+    """Branch name as it is actually spelled in this repo (e.g. 'UAT' for 'uat'), or None."""
+    r = _git(repo_dir, "for-each-ref", "--format=%(refname)", "refs/heads", "refs/remotes/origin")
+    for ref in r.stdout.splitlines():
+        name = ref.split("/", 3)[-1] if ref.startswith("refs/remotes/origin/") else ref.split("/", 2)[-1]
+        if name.lower() == branch.lower() and name != "HEAD":
+            return name
+    return None
+
+
+def _resolve_after_fetch(repo_dir: Path, branch: str) -> Optional[str]:
+    """resolve_branch, then if that finds nothing, try harder: fetch the branch explicitly
+    (clones with a narrowed fetch refspec never download other branches) and match case-insensitively."""
+    ref = resolve_branch(repo_dir, branch)
+    if ref is not None:
+        return ref
+    if _fetch(repo_dir, f"+refs/heads/{branch}:refs/remotes/origin/{branch}", warn=False):
+        ref = resolve_branch(repo_dir, branch)
+        if ref is not None:
+            return ref
+    actual = _find_ref_ignoring_case(repo_dir, branch)
+    if actual and actual != branch:
+        logger.info("%s: using branch '%s' for requested '%s'", repo_dir, actual, branch)
+        return resolve_branch(repo_dir, actual)
     return None
 
 
@@ -409,13 +438,13 @@ def index_branch(
     fallbacks: dict[str, str] = {}
     unusable: list[str] = []
     if single:
-        ref = resolve_branch(target_dir, branch)
+        ref = _resolve_after_fetch(target_dir, branch)
         if ref is None:
             raise ValueError(f"Branch '{branch}' not found in {target_dir}")
         plan.append((None, target_dir, ref))
     else:
         for name, repo_dir in repos.items():
-            ref = resolve_branch(repo_dir, branch)
+            ref = _resolve_after_fetch(repo_dir, branch)
             if ref is None:
                 ref = default_branch(repo_dir)
                 if ref is None:
