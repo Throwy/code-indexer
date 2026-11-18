@@ -252,6 +252,7 @@ def _fetch(repo_dir: Path, *refspecs: str, warn: bool = True) -> bool:
         return False
     if r.returncode != 0:
         if not warn:
+            logger.debug("git fetch %s failed in %s: %s", " ".join(refspecs), repo_dir, r.stderr.strip())
             return False
         logger.warning("git fetch failed in %s (indexing possibly stale refs): %s", repo_dir, r.stderr.strip())
         return False
@@ -303,7 +304,9 @@ def _resolve_after_fetch(repo_dir: Path, branch: str) -> Optional[str]:
     (clones with a narrowed fetch refspec never download other branches) and match case-insensitively."""
     ref = resolve_branch(repo_dir, branch)
     if ref is not None:
+        logger.debug("%s: '%s' resolved to %s", repo_dir, branch, ref)
         return ref
+    logger.debug("%s: '%s' not found after fetch; trying explicit fetch", repo_dir, branch)
     if _fetch(repo_dir, f"+refs/heads/{branch}:refs/remotes/origin/{branch}", warn=False):
         ref = resolve_branch(repo_dir, branch)
         if ref is not None:
@@ -312,6 +315,7 @@ def _resolve_after_fetch(repo_dir: Path, branch: str) -> Optional[str]:
     if actual and actual != branch:
         logger.info("%s: using branch '%s' for requested '%s'", repo_dir, actual, branch)
         return resolve_branch(repo_dir, actual)
+    logger.debug("%s: no branch '%s' (local or origin) even after explicit fetch", repo_dir, branch)
     return None
 
 
@@ -451,6 +455,7 @@ def index_branch(
                     unusable.append(name)  # e.g. a repo with no commits
                     continue
                 fallbacks[name] = ref
+                logger.warning("%s has no branch '%s'; falling back to %s", name, branch, ref)
             plan.append((name, repo_dir, ref))
         if len(fallbacks) + len(unusable) == len(repos):
             raise ValueError(f"Branch '{branch}' not found in any repo under {target_dir}")
