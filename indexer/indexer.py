@@ -578,6 +578,13 @@ def branch_indexes_for(directory: Path) -> list[str]:
                   if i["name"].startswith(key + "_") and i["branch"])
 
 
+def branch_index_infos(directory: Path) -> list[dict]:
+    """list_indexes() entries for `directory`'s branch indexes, sorted by branch name."""
+    key = hashlib.sha256(str(directory).encode()).hexdigest()[:16]
+    return sorted((i for i in list_indexes() if i["name"].startswith(key + "_") and i["branch"]),
+                  key=lambda i: i["branch"])
+
+
 def no_index_message(directory: Path, branch: Optional[str] = None, shown_dir: Optional[str] = None) -> str:
     """Explain a missing index, pointing at the branch indexes that do exist for the directory."""
     shown_dir = shown_dir or str(directory)

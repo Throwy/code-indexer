@@ -11,12 +11,13 @@ Usage:
 import functools
 import json
 import sys
+import time
 from pathlib import Path
 
 import click
 
 from . import log as _log
-from .indexer import index_directory, index_branch, index_default, get_db, db_path_for, resolve_index
+from .indexer import index_directory, index_branch, index_default, get_db, db_path_for, resolve_index, branch_index_infos
 
 
 def verbosity_options(f):
@@ -261,6 +262,7 @@ def refs(name, directory, limit, as_json, branch, repo):
 def status(directory, branch):
     """Show index statistics for DIRECTORY."""
     target = Path(directory).resolve()
+    explicit_branch = branch
     branch = _use_index(target, branch, directory, soft=True)
     db_path = db_path_for(target, branch=branch)
 
@@ -279,6 +281,14 @@ def status(directory, branch):
         click.echo("  Languages:")
         for lang, count in s["languages"]:
             click.echo(f"    {lang:<15} {count} files")
+
+    # Without --branch, only one branch index is shown; list the rest so none look missing.
+    others = [i for i in branch_index_infos(target) if i["branch"] != branch] if not explicit_branch else []
+    if others:
+        click.echo("\nOther indexed branches (use --branch <name> to inspect):")
+        for i in others:
+            when = time.strftime("%Y-%m-%d %H:%M", time.localtime(i["indexed_at"])) if i["indexed_at"] else "unknown"
+            click.echo(f"  {i['branch']:<20} {i['files']} files, {i['symbols']} symbols (indexed {when})")
 
 
 @cli.command("repos")
