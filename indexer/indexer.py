@@ -241,21 +241,48 @@ def _ref_exists(repo_dir: Path, ref: str) -> bool:
     return _git(repo_dir, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}").returncode == 0
 
 
-def _fetch(repo_dir: Path) -> None:
-    """Fetch from origin, silently ignoring repos with no remote."""
-    _git(repo_dir, "fetch", "--prune", "origin")
+def _fetch(repo_dir: Path) -> bool:
+    """Fetch from origin. Returns True on success; warns (never raises) if it fails or there is no remote."""
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}  # never hang on a credential prompt
+    try:
+        r = subprocess.run(["git", "fetch", "--prune", "origin"], cwd=repo_dir, env=env,
+                           capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        logger.warning("git fetch timed out in %s; indexing possibly stale refs", repo_dir)
+        return False
+    if r.returncode != 0:
+        logger.warning("git fetch failed in %s (indexing possibly stale refs): %s", repo_dir, r.stderr.strip())
+        return False
+    return True
+
+
+def _is_ancestor(repo_dir: Path, ancestor: str, descendant: str) -> bool:
+    return _git(repo_dir, "merge-base", "--is-ancestor", ancestor, descendant).returncode == 0
 
 
 def resolve_branch(repo_dir: Path, branch: str) -> Optional[str]:
-    """The git ref to read for `branch` in this repo: the local branch, else origin/<branch>, else None.
+    """The git ref to read for `branch` in this repo, or None.
 
+    Considers both the local branch and origin/<branch> and returns the most
+    up-to-date one: origin when the local branch is behind it (a fetch never
+    advances local branches), the local branch when it has unpushed commits.
+    If they have diverged the local branch wins, with a warning.
     The name "main" also falls back to "master" for repos that still use the old default.
     """
     names = [branch, "master"] if branch == "main" else [branch]
     for name in names:
-        for ref in (name, f"origin/{name}"):
-            if _ref_exists(repo_dir, ref):
-                return ref
+        local = name if _ref_exists(repo_dir, f"refs/heads/{name}") else None
+        remote = f"origin/{name}" if _ref_exists(repo_dir, f"refs/remotes/origin/{name}") else None
+        if local and remote:
+            if _is_ancestor(repo_dir, local, remote):
+                return remote
+            if not _is_ancestor(repo_dir, remote, local):
+                logger.warning("%s: local '%s' and '%s' have diverged; indexing local", repo_dir, local, remote)
+            return local
+        if local or remote:
+            return local or remote
+        if _ref_exists(repo_dir, name):  # tag, sha, or other ref
+            return name
     return None
 
 
