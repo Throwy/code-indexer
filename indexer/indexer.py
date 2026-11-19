@@ -10,6 +10,7 @@ import os
 import re
 import sqlite3
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 import sys
 import time
 from pathlib import Path
@@ -248,6 +249,8 @@ def _ref_exists(repo_dir: Path, ref: str) -> bool:
 def _fetch(repo_dir: Path, *refspecs: str, warn: bool = True) -> bool:
     """Fetch from origin (optionally only `refspecs`). Returns True on success; warns (never raises) on failure."""
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}  # never hang on a credential prompt
+    logger.info("fetching origin in %s ...", repo_dir)
+    t0 = time.perf_counter()
     try:
         r = subprocess.run(["git", "fetch", "--prune", "origin", *refspecs], cwd=repo_dir, env=env,
                            capture_output=True, text=True, timeout=120)
@@ -260,6 +263,7 @@ def _fetch(repo_dir: Path, *refspecs: str, warn: bool = True) -> bool:
             return False
         logger.warning("git fetch failed in %s (indexing possibly stale refs): %s", repo_dir, r.stderr.strip())
         return False
+    logger.debug("git fetch finished in %.1fs in %s", time.perf_counter() - t0, repo_dir)
     return True
 
 
@@ -438,8 +442,9 @@ def index_branch(
     if single:
         _fetch(target_dir)
     else:
-        for repo_dir in repos.values():
-            _fetch(repo_dir)
+        # Network-bound and independent per repo, so fetch them concurrently
+        with ThreadPoolExecutor(max_workers=min(8, len(repos))) as pool:
+            list(pool.map(_fetch, repos.values()))
 
     # Decide which ref to read in each repo before touching the database
     plan: list[tuple[Optional[str], Path, str]] = []   # (repo name, repo dir, ref)
