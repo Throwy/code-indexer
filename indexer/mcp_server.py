@@ -491,10 +491,11 @@ def main():
         description="code-indexer MCP server (stdio). Logs go to stderr.",
     )
     parser.add_argument("-v", "--verbose", action="count", default=0,
-                        help="-v per-file progress, -vv debug. Can also set CODE_INDEXER_VERBOSITY.")
+                        help="-v per-repo/branch summaries, -vv per-file progress. Can also set CODE_INDEXER_VERBOSITY.")
+    parser.add_argument("--debug", action="store_true", help="Debug logging (timings, paths, git details, tracebacks).")
     parser.add_argument("-q", "--quiet", action="store_true", help="Only log errors.")
     args, _ = parser.parse_known_args()
-    _log.configure(args.verbose, args.quiet)
+    _log.configure(args.verbose, args.quiet, args.debug)
     _log.logger.debug("starting MCP server (verbosity=%d)", _log.get_level())
     mcp.run()
 

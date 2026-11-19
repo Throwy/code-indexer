@@ -39,7 +39,7 @@ This creates a `.code-index.db` file inside the target directory.
 
 Options:
 - `--force`           Re-index all files even if unchanged
-- `-v`                Per-file progress (`-vv` for debug; see [Verbosity](#11-verbosity-and-logging))
+- `-v`                Per-repo/branch summaries (`-vv` per-file, `--debug` for debug; see [Verbosity](#11-verbosity-and-logging))
 - `--branch <name>`   Index a specific git branch instead of the default (`main`, else `master`)
 - `--worktree`        Index the working tree (uncommitted changes included) instead of a branch
 
@@ -299,7 +299,7 @@ code-indexer clean --all
 
 ## 11. Verbosity and logging
 
-Every command accepts `-v` / `--verbose` (repeat it for more) and `-q` / `--quiet`.
+Every command accepts `-v` / `--verbose` (repeat it for more), `--debug` and `-q` / `--quiet`.
 The flag works before or after the subcommand: `code-indexer -v index .` and
 `code-indexer index . -v` are the same.
 
@@ -307,20 +307,22 @@ The flag works before or after the subcommand: `code-indexer -v index .` and
 |------|-------|--------------|
 | `-q` | quiet | Errors only; `index` and `clean` skip their summaries |
 | *(none)* | default | Warnings and errors, plus each command's normal output |
-| `-v` | verbose | Per-file progress: `index`, `skip`, `error`, stale removals |
-| `-vv` | debug | Also database paths, discovered repos, file counts, query timings, index/clean decisions, and tracebacks for files that fail to parse |
+| `-v` | verbose | Per-repo / per-branch summaries: files indexed, skipped, errors, stale removals, symbols |
+| `-vv` | detail | Also per-file progress: `index`, `skip`, `error`, stale removals |
+| `--debug` | debug | Everything above plus database paths, discovered repos, file counts, git details, query timings, index/clean decisions, and tracebacks for files that fail to parse |
 
 ```bash
-code-indexer index ~/dev -v            # per-file progress
-code-indexer index ~/dev -vv           # + repos found, timings, DB path
-code-indexer search "UserService" --dir ~/dev -vv     # + query timing and row counts
-code-indexer clean --stale --dry-run -vv              # + why each index counts as stale
+code-indexer index ~/dev -v            # per-repo summaries
+code-indexer index ~/dev -vv           # + per-file progress
+code-indexer index ~/dev --debug       # + repos found, timings, DB path
+code-indexer search "UserService" --dir ~/dev --debug     # + query timing and row counts
+code-indexer clean --stale --dry-run --debug              # + why each index counts as stale
 ```
 
 - Logs go to **stderr**; results and summaries stay on stdout, so
-  `code-indexer search ... --json -vv > out.json` still produces clean JSON.
+  `code-indexer search ... --json --debug > out.json` still produces clean JSON.
 - Set a default with the `CODE_INDEXER_VERBOSITY` environment variable
-  (`quiet`, `warning`, `info`, `debug`, or `-1` to `2`). Flags override it, and
+  (`quiet`, `warning`, `info`, `detail`, `debug`, or `-1` to `3`). Flags override it, and
   `-q` always wins.
 - The MCP server takes the same flags. Claude Desktop shows its stderr in the
   MCP log, so this is the way to see what it is doing:
@@ -330,7 +332,7 @@ code-indexer clean --stale --dry-run -vv              # + why each index counts 
   "mcpServers": {
     "code-indexer": {
       "command": "code-indexer-mcp",
-      "args": ["-vv"]
+      "args": ["--debug"]
     }
   }
 }

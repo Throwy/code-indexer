@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Optional
 
 from .db import DB
-from .log import logger
+from .log import logger, detail
 from .parser import iter_source_files, parse_file, parse_content, language_for_path, EXTENSION_TO_LANGUAGE, IGNORED_DIRS
 
 
@@ -121,6 +121,7 @@ def index_directory(
     logger.debug("repos: %s", ", ".join(repos) or "none (single-repo mode)")
     files = iter_source_files(target_dir)
     logger.debug("found %d source files under %s", len(files), target_dir)
+    logger.info("indexing %d source file(s) under %s (%d repo(s))", len(files), target_dir, len(repos))
 
     stats = {"files_scanned": 0, "files_indexed": 0, "files_skipped": 0,
              "symbols_added": 0, "errors": 0}
@@ -148,7 +149,7 @@ def index_directory(
                     if existing["repo"] != repo:
                         db.update_repo(rel, repo)  # e.g. index predates repo tagging
                     stats["files_skipped"] += 1
-                    logger.info(f"  skip  {rel}")
+                    detail(f"  skip  {rel}")
                     continue
 
                 # Upsert file record and clear old symbols
@@ -174,19 +175,22 @@ def index_directory(
                 if stats["files_indexed"] % _CHECKPOINT_EVERY == 0:
                     db.checkpoint()
 
-                logger.info(f"  index {rel}  ({len(symbols)} symbols)")
+                detail(f"  index {rel}  ({len(symbols)} symbols)")
 
             except Exception as e:
                 stats["errors"] += 1
-                logger.info(f"  error {rel}: {e}")
+                detail(f"  error {rel}: {e}")
                 logger.debug("traceback for %s", rel, exc_info=True)
 
         # Remove stale file records (deleted files)
         stale = existing_paths - seen_paths
         for path_str in stale:
             db.delete_file(path_str)
-            logger.info(f"  removed stale: {path_str}")
+            detail(f"  removed stale: {path_str}")
 
+    logger.info("done: %d indexed, %d skipped, %d removed (stale), %d error(s), %d symbols",
+                stats["files_indexed"], stats["files_skipped"], len(stale),
+                stats["errors"], stats["symbols_added"])
     logger.debug("indexing finished in %.2fs: %s", time.perf_counter() - t0, stats)
     db.close()
     return stats
@@ -365,14 +369,14 @@ def _index_repo_ref(db: DB, repo_dir: Path, ref: str, prefix: str, repo: Optiona
                     if existing["repo"] != repo:
                         db.update_repo(rel_path, repo)
                     stats["files_skipped"] += 1
-                    logger.info(f"  skip  {rel_path}")
+                    detail(f"  skip  {rel_path}")
                     continue
 
                 # Read file content from git without touching the working tree
                 content = blobs.read(blob_sha)
                 if content is None:
                     stats["errors"] += 1
-                    logger.info(f"  error {rel_path}: blob {blob_sha} not found")
+                    detail(f"  error {rel_path}: blob {blob_sha} not found")
                     continue
 
                 file_id = db.upsert_file(rel_path, 0.0, blob_sha, lang, repo)
@@ -395,11 +399,11 @@ def _index_repo_ref(db: DB, repo_dir: Path, ref: str, prefix: str, repo: Optiona
                 stats["symbols_added"] += len(symbols)
                 if stats["files_indexed"] % _CHECKPOINT_EVERY == 0:
                     db.checkpoint()
-                logger.info(f"  index {rel_path}  ({len(symbols)} symbols)")
+                detail(f"  index {rel_path}  ({len(symbols)} symbols)")
 
             except Exception as e:
                 stats["errors"] += 1
-                logger.info(f"  error {rel_path}: {e}")
+                detail(f"  error {rel_path}: {e}")
                 logger.debug("traceback for %s", rel_path, exc_info=True)
 
 
@@ -475,14 +479,26 @@ def index_branch(
 
     with db.batch():
         for name, repo_dir, ref in plan:
-            logger.info(f"repo {name or repo_dir.name}: {ref}")
+            label = name or repo_dir.name
+            logger.debug("repo %s: indexing %s", label, ref)
+            before = dict(stats)
             prefix = f"{name}/" if name else ""
             _index_repo_ref(db, repo_dir, ref, prefix, name, force, stats, seen_paths)
+            logger.info("repo %s @ %s: %d indexed, %d skipped, %d error(s), %d symbols",
+                        label, ref,
+                        stats["files_indexed"] - before["files_indexed"],
+                        stats["files_skipped"] - before["files_skipped"],
+                        stats["errors"] - before["errors"],
+                        stats["symbols_added"] - before["symbols_added"])
 
         # Remove stale records (files deleted from the branch, or repos that went away)
-        for path_str in existing_paths - seen_paths:
+        stale = existing_paths - seen_paths
+        for path_str in stale:
             db.delete_file(path_str)
-            logger.info(f"  removed stale: {path_str}")
+            detail(f"  removed stale: {path_str}")
+
+    logger.info("branch '%s': %d repo(s), %d indexed, %d skipped, %d removed (stale), %d error(s)",
+                branch, len(plan), stats["files_indexed"], stats["files_skipped"], len(stale), stats["errors"])
 
     logger.debug("indexing finished in %.2fs: %s", time.perf_counter() - t0, stats)
     db.close()

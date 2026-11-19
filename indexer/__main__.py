@@ -21,13 +21,15 @@ from .indexer import index_directory, index_branch, index_default, get_db, db_pa
 
 
 def verbosity_options(f):
-    """Add -v/--verbose (repeatable) and -q/--quiet to a command and apply them."""
+    """Add -v/--verbose (repeatable), --debug and -q/--quiet to a command and apply them."""
     @click.option("--verbose", "-v", count=True,
-                  help="More output: -v per-file progress, -vv debug (timings, paths, tracebacks). Logs go to stderr.")
+                  help="More output: -v per-repo/branch summaries, -vv per-file progress. Logs go to stderr.")
+    @click.option("--debug", is_flag=True,
+                  help="Debug output: timings, paths, git details and tracebacks (includes -vv).")
     @click.option("--quiet", "-q", is_flag=True, help="Suppress progress and summary output; errors still show.")
     @functools.wraps(f)
-    def wrapper(*args, verbose=0, quiet=False, **kwargs):
-        _log.configure(verbose, quiet)
+    def wrapper(*args, verbose=0, quiet=False, debug=False, **kwargs):
+        _log.configure(verbose, quiet, debug)
         return f(*args, **kwargs)
     return wrapper
 
@@ -45,11 +47,12 @@ def _use_index(target: Path, branch, directory, soft: bool = False):
 
 @click.group()
 @click.option("--verbose", "-v", count=True,
-              help="More output: -v per-file progress, -vv debug. Also accepted after the subcommand.")
+              help="More output: -v per-repo/branch summaries, -vv per-file progress. Also accepted after the subcommand.")
+@click.option("--debug", is_flag=True, help="Debug output: timings, paths, git details and tracebacks.")
 @click.option("--quiet", "-q", is_flag=True, help="Suppress progress and summary output; errors still show.")
-def cli(verbose, quiet):
+def cli(verbose, debug, quiet):
     """code-indexer — index and search your codebase locally."""
-    _log.configure(verbose, quiet, from_group=True)
+    _log.configure(verbose, quiet, debug, from_group=True)
 
 
 @cli.command()
