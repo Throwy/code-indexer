@@ -482,6 +482,10 @@ def index_branch(
     existing_paths = set(db.all_indexed_paths())
     seen_paths: set[str] = set()
 
+    # Column widths so the per-repo summary lines up
+    name_w = max((len(n or d.name) for n, d, _ in plan), default=0)
+    ref_w = max((len(r) for _, _, r in plan), default=0)
+
     with db.batch():
         for name, repo_dir, ref in plan:
             label = name or repo_dir.name
@@ -489,8 +493,8 @@ def index_branch(
             before = dict(stats)
             prefix = f"{name}/" if name else ""
             _index_repo_ref(db, repo_dir, ref, prefix, name, force, stats, seen_paths)
-            logger.info("repo %s @ %s: %d indexed, %d skipped, %d error(s), %d symbols",
-                        label, ref,
+            logger.info("repo %-*s  @ %-*s  indexed %5d  skipped %5d  errors %3d  symbols %6d",
+                        name_w, label, ref_w, ref,
                         stats["files_indexed"] - before["files_indexed"],
                         stats["files_skipped"] - before["files_skipped"],
                         stats["errors"] - before["errors"],
